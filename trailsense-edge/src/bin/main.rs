@@ -16,6 +16,7 @@ use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::PromiscuousPkt;
+use ieee80211::GenericFrame;
 use log::info;
 
 extern crate alloc;
@@ -40,7 +41,7 @@ fn main() -> ! {
     esp_rtos::start(timg0.timer0);
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
 
-    let _transport = BleConnector::new(&radio_init, peripherals.BT, Default::default()).unwrap();
+    let _transport = BleConnector::new(&radio_init, peripherals.BT, Default::default()).unwrap(); // Due to some misterious bug from the esp_radio, it is necessary to setup BLE, even when not in use. This issue describes how to fix it https://github.com/espressif/esp-idf/issues/13113
     let (mut _wifi_controller, interfaces) =
         esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
@@ -53,10 +54,7 @@ fn main() -> ! {
 
     device.set_receive_cb(read_packet);
 
-    loop {
-        info!("Hello Trailsense team!");
-        blocking_delay(Duration::from_millis(500));
-    }
+    loop {}
 }
 
 fn blocking_delay(duration: Duration) {
@@ -72,5 +70,16 @@ fn init_hardware() -> Peripherals {
 }
 
 fn read_packet(packet: PromiscuousPkt) {
-    info!("Received packet: {} bytes", packet.len);
+    let frame = GenericFrame::new(packet.data, false).unwrap();
+
+    if let Some(source) = frame.address_2() {
+        if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
+            || (source[0] == 52 && source[1] == 152 && source[2] == 122))
+        {
+            info!(
+                "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                source[0], source[1], source[2], source[3], source[4], source[5]
+            );
+        }
+    }
 }
