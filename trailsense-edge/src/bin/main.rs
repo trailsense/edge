@@ -66,7 +66,9 @@ fn init_hardware() -> Peripherals {
 }
 
 fn read_packet(packet: PromiscuousPkt) {
-    let frame = GenericFrame::new(&packet.data, false).unwrap();
+    let Ok(frame) = GenericFrame::new(&packet.data, false) else {
+        return;
+    };
 
     if let Some(source) = frame.address_2() {
         if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
