@@ -3,6 +3,7 @@ edition      = "2024"
 name         = "trailsense-edge"
 rust-version = "1.88"
 version      = "0.1.0"
+description  = "Privacy focused people counting"
 
 [[bin]]
 name = "trailsense-edge"
