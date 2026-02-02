@@ -35,4 +35,3 @@ pub fn fingerprint_probe(data: &[u8]) -> u16 {
 
     fingerprint
 }
-∂
