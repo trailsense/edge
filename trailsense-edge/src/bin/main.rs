@@ -19,6 +19,7 @@ use esp_radio::wifi::PromiscuousPkt;
 use ieee80211::GenericFrame;
 use ieee80211::common::{FrameType, ManagementFrameSubtype};
 use log::info;
+use trailsense_edge::probe_parser;
 
 extern crate alloc;
 
@@ -85,6 +86,8 @@ fn read_packet(packet: PromiscuousPkt) {
                     let body = &packet.data[body_offset..body_offset + body_len.min(100)];
 
                     info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
+                    let fingerprint = probe_parser::fingerprint_probe(packet.data);
+                    info!("Fingerpring: {:?}", fingerprint);
                 }
             }
         }
