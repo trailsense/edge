@@ -1,5 +1,5 @@
 extern crate alloc;
-use crate::models::{MODEL, WeakClassifier};
+use crate::models::MODEL;
 use alloc::vec::Vec;
 
 /** # Fingerprint Probe
@@ -9,20 +9,24 @@ use alloc::vec::Vec;
 ## Arguments
 * `data` - A byte slice representing the probe data to be fingerprinted.
 ## Returns
-* A vector of bytes representing the fingerprint.
+* A u16 variable is returned, where each bit represents one bit of the filter.
 */
-pub fn fingerprint_probe(data: &[u8]) -> Vec<u8> {
-    let mut fingerprint = Vec::<u8>::new();
+pub fn fingerprint_probe(data: &[u8]) -> u16 {
+    // Change to u32 or as needed if increasing filter size.
+    let mut fingerprint = 0b000u16;
     for model in MODEL {
         let mut xor_result = 0u8;
         for i in 0..data.len() {
+            if model.mask.len() <= i {
+                break;
+            }
             if model.mask[i] != 0x00 {
                 xor_result ^= data[i]
             }
         }
 
-        let bit = (xor_result.count_ones() % 2) as u8;
-        fingerprint.push(bit);
+        let bit = (xor_result.count_ones() % 2) as u16;
+        fingerprint = (fingerprint << 1) | bit;
     }
 
     fingerprint
