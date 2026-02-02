@@ -58,11 +58,6 @@ fn main() -> ! {
     loop {}
 }
 
-fn blocking_delay(duration: Duration) {
-    let delay_start = Instant::now();
-    while delay_start.elapsed() < duration {}
-}
-
 fn init_hardware() -> Peripherals {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
