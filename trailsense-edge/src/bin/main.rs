@@ -12,13 +12,13 @@ use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::peripherals::Peripherals;
 
-use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::PromiscuousPkt;
 use ieee80211::GenericFrame;
 use ieee80211::common::{FrameType, ManagementFrameSubtype};
 use log::info;
+use trailsense_edge::probe_parser::fingerprint_probe;
 
 extern crate alloc;
 
@@ -66,25 +66,29 @@ fn init_hardware() -> Peripherals {
 }
 
 fn read_packet(packet: PromiscuousPkt) {
-    let frame = GenericFrame::new(&packet.data, false).unwrap();
+    let Ok(frame) = GenericFrame::new(&packet.data, false) else {
+        return;
+    };
 
     if let Some(source) = frame.address_2() {
         if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
-            || (source[0] == 52 && source[1] == 152 && source[2] == 122))
+            || (source[0] == 52 && source[1] == 152 && source[2] == 122) || (source[0] == 112 && source[1] == 211 && source[2] == 121) || (source[0] == 16 && source[1] == 60 && source[2] == 89))
         {
-            info!(
-                "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                source[0], source[1], source[2], source[3], source[4], source[5]
-            );
-
             let fc = frame.frame_control_field();
             if let FrameType::Management(subtype) = fc.frame_type() {
                 if subtype == ManagementFrameSubtype::ProbeRequest {
                     let body_offset = 24;
-                    let body_len = packet.data.len().saturating_sub(body_offset);
-                    let body = &packet.data[body_offset..body_offset + body_len.min(100)];
+                    let body = &packet.data[body_offset..];
 
+                    let fingerprint = fingerprint_probe(body);
+
+                    info!(
+                        "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        source[0], source[1], source[2], source[3], source[4], source[5]
+                    );
                     info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
+
+                    info!("Fingerprint: {:08b}", fingerprint);
                 }
             }
         }
