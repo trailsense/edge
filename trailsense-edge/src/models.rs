@@ -2,7 +2,7 @@
 #[derive(Debug, Clone, Copy)]
 pub struct WeakClassifier {
     pub mask: &'static [u8],
-    pub threshold: u32,
+    pub threshold: u32, // both alpha and threshold are needed later when trying to identify single probes
     pub alpha: f32,
 }
 
