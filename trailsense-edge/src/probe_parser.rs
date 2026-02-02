@@ -1,6 +1,5 @@
 extern crate alloc;
 use crate::models::MODEL;
-use alloc::vec::Vec;
 
 /** # Fingerprint Probe
 * Generate a fingerprint for the given probe data using the defined filters generated with a python script.
@@ -14,18 +13,20 @@ use alloc::vec::Vec;
 pub fn fingerprint_probe(data: &[u8]) -> u16 {
     // Change to u32 or as needed if increasing filter size.
     let mut fingerprint = 0b000u16;
-    for model in MODEL {
+
+    for (idx, model) in MODEL.iter().enumerate() {
+        let max_iterations = core::cmp::min(data.len(), model.mask.len());
+
         let mut xor_result = 0u8;
-        for i in 0..data.len() {
-            if model.mask.len() <= i {
-                break;
-            }
+
+        for i in 0..max_iterations {
             if model.mask[i] != 0x00 {
                 xor_result ^= data[i]
             }
         }
 
         let bit = (xor_result.count_ones() % 2) as u16;
+        log::info!("filter {} -> xor={:#04x}, bit={}", idx, xor_result, bit);
         fingerprint = (fingerprint << 1) | bit;
     }
 
