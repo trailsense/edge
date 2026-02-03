@@ -17,6 +17,7 @@ esp-rtos = { version = "0.2.0", features = [
   "esp-radio",
   "esp32",
   "log-04",
+  "embassy",
 ] }
 
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32", "log-04"] }
@@ -60,6 +61,8 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
   "socket-udp",
 ] }
 ieee80211 = "0.5.9"
+embassy-executor = "0.9.1"
+embassy-time = "0.5.0"
 
 
 [profile.dev]

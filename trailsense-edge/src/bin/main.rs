@@ -7,11 +7,12 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use embassy_executor::Spawner;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::main;
 use esp_hal::peripherals::Peripherals;
 
+use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::PromiscuousPkt;
@@ -30,10 +31,9 @@ esp_bootloader_esp_idf::esp_app_desc!();
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
-#[main]
-fn main() -> ! {
+#[esp_rtos::main]
+async fn main(spawner: Spawner) -> ! {
     // generator version: 1.1.0
-
     let peripherals = init_hardware();
 
     esp_println::logger::init_logger_from_env();
@@ -55,7 +55,22 @@ fn main() -> ! {
 
     device.set_receive_cb(read_packet);
 
-    loop {}
+    let Ok(_) = spawner.spawn(send_to_backend()) else {
+        info!("The backend task broke on spawn");
+        loop {}
+    };
+
+    loop {
+        Timer::after(Duration::from_secs(3600)).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn send_to_backend() {
+    loop {
+        log::info!("This is a second task");
+        Timer::after(Duration::from_millis(500)).await;
+    }
 }
 
 fn init_hardware() -> Peripherals {
