@@ -26,16 +26,20 @@ fn fingerprint_probe(data: &[u8]) -> u16 {
 
     for (idx, model) in MODEL.iter().enumerate() {
         let max_iterations = core::cmp::min(data.len(), model.positive_mask.len()) - 1;
-        let mut score = 0;
+        let mut score: i32 = 0;
         for i in 0..max_iterations {
             let positive_bits = data[i] & model.positive_mask[i];
             let negative_bits = data[i] & model.negative_mask[i];
-            score += positive_bits.count_ones();
-            score -= negative_bits.count_ones();
+            score += positive_bits.count_ones() as i32;
+            score -= negative_bits.count_ones() as i32;
         }
 
         log::info!("Filter {} resulted in {}", idx, score);
-        let bit = if score >= model.threshold { 1 } else { 0 };
+        let bit = if score >= model.threshold as i32 {
+            1
+        } else {
+            0
+        };
         fingerprint = (fingerprint << 1) | bit;
     }
 
