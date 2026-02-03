@@ -11,21 +11,25 @@ use embassy_executor::Spawner;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::Peripherals;
+use esp_hal::rng::Rng;
 
 use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
-use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::PromiscuousPkt;
 use ieee80211::GenericFrame;
 use ieee80211::common::{FrameType, ManagementFrameSubtype};
 use log::info;
+use static_cell::StaticCell;
 use trailsense_edge::probe_parser::fingerprint_probe;
+use trailsense_edge::wifi;
 
 extern crate alloc;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -40,25 +44,34 @@ async fn main(spawner: Spawner) -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
-    let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
 
-    let _transport = BleConnector::new(&radio_init, peripherals.BT, Default::default()).unwrap(); // Due to some misterious bug from the esp_radio, it is necessary to setup BLE, even when not in use. This issue describes how to fix it https://github.com/espressif/esp-idf/issues/13113
-    let (mut _wifi_controller, interfaces) =
-        esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
+    let radio = RADIO_CELL
+        .uninit()
+        .write(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
+
+    // let _transport = BleConnector::new(radio, peripherals.BT, Default::default()).unwrap(); // Due to some misterious bug from the esp_radio, it is necessary to setup BLE, even when not in use. This issue describes how to fix it https://github.com/espressif/esp-idf/issues/13113
+    let (wifi_controller, interfaces) =
+        esp_radio::wifi::new(radio, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
-    let mut device = interfaces.sniffer;
+    let mut rng = Rng::new();
+    let ctx = wifi::init(&spawner, &mut rng, wifi_controller, interfaces.sta);
 
-    device
-        .set_promiscuous_mode(true)
-        .expect("Failed to set wifi into sniffer mode");
+    wifi::wait_for_connection(ctx.stack).await;
+    wifi::http::access_website(ctx.stack, ctx.tls_seed).await;
 
-    device.set_receive_cb(read_packet);
+    // let mut device = interfaces.sniffer;
 
-    let Ok(_) = spawner.spawn(send_to_backend()) else {
-        info!("The backend task broke on spawn");
-        loop {}
-    };
+    // device
+    //     .set_promiscuous_mode(true)
+    //     .expect("Failed to set wifi into sniffer mode");
+
+    // device.set_receive_cb(read_packet);
+
+    // let Ok(_) = spawner.spawn(send_to_backend()) else {
+    //     info!("The backend task broke on spawn");
+    //     loop {}
+    // };
 
     loop {
         Timer::after(Duration::from_secs(3600)).await;
@@ -80,32 +93,32 @@ fn init_hardware() -> Peripherals {
     peripherals
 }
 
-fn read_packet(packet: PromiscuousPkt) {
-    let Ok(frame) = GenericFrame::new(&packet.data, false) else {
-        return;
-    };
+// fn read_packet(packet: PromiscuousPkt) {
+//     let Ok(frame) = GenericFrame::new(&packet.data, false) else {
+//         return;
+//     };
 
-    if let Some(source) = frame.address_2() {
-        if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
-            || (source[0] == 52 && source[1] == 152 && source[2] == 122) || (source[0] == 112 && source[1] == 211 && source[2] == 121) || (source[0] == 16 && source[1] == 60 && source[2] == 89))
-        {
-            let fc = frame.frame_control_field();
-            if let FrameType::Management(subtype) = fc.frame_type() {
-                if subtype == ManagementFrameSubtype::ProbeRequest {
-                    let body_offset = 24;
-                    let body = &packet.data[body_offset..];
+//     if let Some(source) = frame.address_2() {
+//         if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
+//             || (source[0] == 52 && source[1] == 152 && source[2] == 122) || (source[0] == 112 && source[1] == 211 && source[2] == 121) || (source[0] == 16 && source[1] == 60 && source[2] == 89))
+//         {
+//             let fc = frame.frame_control_field();
+//             if let FrameType::Management(subtype) = fc.frame_type() {
+//                 if subtype == ManagementFrameSubtype::ProbeRequest {
+//                     let body_offset = 24;
+//                     let body = &packet.data[body_offset..];
 
-                    let fingerprint = fingerprint_probe(body);
+//                     let fingerprint = fingerprint_probe(body);
 
-                    info!(
-                        "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                        source[0], source[1], source[2], source[3], source[4], source[5]
-                    );
-                    info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
+//                     info!(
+//                         "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+//                         source[0], source[1], source[2], source[3], source[4], source[5]
+//                     );
+//                     info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
 
-                    info!("Fingerprint: {:08b}", fingerprint);
-                }
-            }
-        }
-    }
-}
+//                     info!("Fingerprint: {:08b}", fingerprint);
+//                 }
+//             }
+//         }
+//     }
+// }
