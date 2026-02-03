@@ -4,6 +4,7 @@ use esp_hal::rng::Rng;
 use esp_radio::wifi::{WifiController, WifiDevice};
 
 pub mod http;
+pub mod manager;
 pub mod tasks;
 
 // Static helper from tutorial

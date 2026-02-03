@@ -1,4 +1,11 @@
 extern crate alloc;
+use esp_radio::wifi::PromiscuousPkt;
+use ieee80211::{
+    GenericFrame,
+    common::{FrameType, ManagementFrameSubtype},
+};
+use log::info;
+
 use crate::models::MODEL;
 
 /// # Fingerprint Probe
@@ -13,7 +20,7 @@ use crate::models::MODEL;
 /// # Returns
 ///
 /// A `u16` value is returned, where each bit represents one bit of the filter.
-pub fn fingerprint_probe(data: &[u8]) -> u16 {
+fn fingerprint_probe(data: &[u8]) -> u16 {
     // Change to u32 or as needed if increasing filter size.
     let mut fingerprint = 0u16;
 
@@ -34,4 +41,34 @@ pub fn fingerprint_probe(data: &[u8]) -> u16 {
     }
 
     fingerprint
+}
+
+pub fn read_packet(packet: PromiscuousPkt) {
+    let Ok(frame) = GenericFrame::new(&packet.data, false) else {
+        return;
+    };
+
+    if let Some(source) = frame.address_2() {
+        if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
+            || (source[0] == 52 && source[1] == 152 && source[2] == 122) || (source[0] == 112 && source[1] == 211 && source[2] == 121) || (source[0] == 16 && source[1] == 60 && source[2] == 89))
+        {
+            let fc = frame.frame_control_field();
+            if let FrameType::Management(subtype) = fc.frame_type() {
+                if subtype == ManagementFrameSubtype::ProbeRequest {
+                    let body_offset = 24;
+                    let body = &packet.data[body_offset..];
+
+                    let fingerprint = fingerprint_probe(body);
+
+                    info!(
+                        "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        source[0], source[1], source[2], source[3], source[4], source[5]
+                    );
+                    info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
+
+                    info!("Fingerprint: {:08b}", fingerprint);
+                }
+            }
+        }
+    }
 }

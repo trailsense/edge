@@ -15,13 +15,9 @@ use esp_hal::rng::Rng;
 
 use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
-use esp_radio::wifi::PromiscuousPkt;
-use ieee80211::GenericFrame;
-use ieee80211::common::{FrameType, ManagementFrameSubtype};
 use log::info;
 use static_cell::StaticCell;
-use trailsense_edge::probe_parser::fingerprint_probe;
-use trailsense_edge::wifi;
+use trailsense_edge::{probe_parser::read_packet, wifi};
 
 extern crate alloc;
 
@@ -73,6 +69,13 @@ async fn main(spawner: Spawner) -> ! {
     //     loop {}
     // };
 
+    spawner
+        .spawn(wifi::manager::wifi_manager_task(
+            interfaces.sniffer,
+            read_packet,
+        ))
+        .unwrap();
+
     loop {
         Timer::after(Duration::from_secs(3600)).await;
     }
@@ -81,7 +84,7 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn send_to_backend() {
     loop {
-        log::info!("This is a second task");
+        info!("This is a second task");
         Timer::after(Duration::from_millis(500)).await;
     }
 }
@@ -92,33 +95,3 @@ fn init_hardware() -> Peripherals {
     esp_alloc::heap_allocator!(size: 72 * 1024);
     peripherals
 }
-
-// fn read_packet(packet: PromiscuousPkt) {
-//     let Ok(frame) = GenericFrame::new(&packet.data, false) else {
-//         return;
-//     };
-
-//     if let Some(source) = frame.address_2() {
-//         if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
-//             || (source[0] == 52 && source[1] == 152 && source[2] == 122) || (source[0] == 112 && source[1] == 211 && source[2] == 121) || (source[0] == 16 && source[1] == 60 && source[2] == 89))
-//         {
-//             let fc = frame.frame_control_field();
-//             if let FrameType::Management(subtype) = fc.frame_type() {
-//                 if subtype == ManagementFrameSubtype::ProbeRequest {
-//                     let body_offset = 24;
-//                     let body = &packet.data[body_offset..];
-
-//                     let fingerprint = fingerprint_probe(body);
-
-//                     info!(
-//                         "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-//                         source[0], source[1], source[2], source[3], source[4], source[5]
-//                     );
-//                     info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
-
-//                     info!("Fingerprint: {:08b}", fingerprint);
-//                 }
-//             }
-//         }
-//     }
-// }
