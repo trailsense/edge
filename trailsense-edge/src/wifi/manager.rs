@@ -25,7 +25,6 @@ pub async fn wifi_manager_task(
     sniffer
         .set_promiscuous_mode(true)
         .expect("Failed to enable promiscuous mode");
-    // sniffer.set_receive_cb(callback);
     info!("Sniffer enabled, callback installed");
     loop {
         let cmd = receiver.receive().await;
