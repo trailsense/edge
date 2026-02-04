@@ -69,6 +69,7 @@ embassy-net =  { version = "0.8.0", features = [
 reqwless = { version ="0.14.0", default-features=false, features = [
   "embedded-tls",
 ]}
+embassy-sync = "0.7.2"
 
 
 [profile.dev]

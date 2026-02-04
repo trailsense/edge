@@ -8,6 +8,7 @@
 #![deny(clippy::large_stack_frames)]
 
 use embassy_executor::Spawner;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::Peripherals;
@@ -17,7 +18,10 @@ use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
 use log::info;
 use static_cell::StaticCell;
-use trailsense_edge::{probe_parser::read_packet, wifi};
+use trailsense_edge::{
+    probe_parser::read_packet,
+    wifi::{self, manager::WifiCmd},
+};
 
 extern crate alloc;
 
@@ -26,6 +30,7 @@ extern crate alloc;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
+static WIFI_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, WifiCmd, 4> = Channel::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -73,11 +78,15 @@ async fn main(spawner: Spawner) -> ! {
         .spawn(wifi::manager::wifi_manager_task(
             interfaces.sniffer,
             read_packet,
+            WIFI_COMMAND_CHANNEL.receiver(),
         ))
         .unwrap();
 
     loop {
-        Timer::after(Duration::from_secs(3600)).await;
+        WIFI_COMMAND_CHANNEL.send(WifiCmd::StopSniffing).await;
+        Timer::after(Duration::from_secs(10)).await;
+        WIFI_COMMAND_CHANNEL.send(WifiCmd::StartSniffing).await;
+        Timer::after(Duration::from_secs(10)).await;
     }
 }
 
