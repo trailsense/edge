@@ -5,8 +5,8 @@ use esp_radio::wifi::{
     ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice, WifiEvent, WifiStaState,
 };
 
-const SSID: &str = env!("SSID");
-const PASSWORD: &str = env!("PASSWORD");
+const SSID: Option<&'static str> = option_env!("WIFI_SSID");
+const PASSWORD: Option<&'static str> = option_env!("WIFI_PASSWORD");
 
 #[embassy_executor::task]
 pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
@@ -17,6 +17,21 @@ pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
 pub async fn connection(mut controller: WifiController<'static>) {
     println!("start connection task");
     println!("Device capabilities: {:?}", controller.capabilities());
+    let ssid = match SSID {
+        Some(v) => v,
+        None => {
+            println!("WIFI_SSID not set");
+            return;
+        }
+    };
+
+    let password = match PASSWORD {
+        Some(v) => v,
+        None => {
+            println!("WIFI_PASSWORD not set");
+            return;
+        }
+    };
 
     loop {
         if matches!(esp_radio::wifi::sta_state(), WifiStaState::Connected) {
@@ -27,8 +42,8 @@ pub async fn connection(mut controller: WifiController<'static>) {
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = ModeConfig::Client(
                 ClientConfig::default()
-                    .with_ssid(SSID.into())
-                    .with_password(PASSWORD.into()),
+                    .with_ssid(ssid.into())
+                    .with_password(password.into()),
             );
 
             controller.set_config(&client_config).unwrap();

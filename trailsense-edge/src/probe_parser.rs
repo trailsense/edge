@@ -56,6 +56,9 @@ pub fn read_packet(packet: PromiscuousPkt) {
             if let FrameType::Management(subtype) = fc.frame_type() {
                 if subtype == ManagementFrameSubtype::ProbeRequest {
                     let body_offset = 24;
+                    if packet.data.len() < body_offset {
+                        return;
+                    }
                     let body = &packet.data[body_offset..];
 
                     let fingerprint = fingerprint_probe(body);

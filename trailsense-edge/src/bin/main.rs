@@ -59,7 +59,7 @@ async fn main(spawner: Spawner) -> ! {
     let ctx = wifi::init(&spawner, &mut rng, wifi_controller, interfaces.sta);
 
     wifi::wait_for_connection(ctx.stack).await;
-    wifi::http::access_website(ctx.stack, ctx.tls_seed).await;
+    wifi::http::send_data(ctx.stack, ctx.tls_seed).await;
 
     spawner
         .spawn(wifi::manager::wifi_manager_task(

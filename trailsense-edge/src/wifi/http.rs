@@ -4,13 +4,14 @@ use embassy_net::{
     tcp::client::{TcpClient, TcpClientState},
 };
 use esp_println::println;
+use log::error;
 use reqwless::{
     client::{HttpClient, TlsConfig},
     request::RequestBuilder,
 };
 
-pub async fn access_website(stack: Stack<'_>, tls_seed: u64) {
-    let mut rx_buffer = [0; 4096];
+pub async fn send_data(stack: Stack<'_>, tls_seed: u64) {
+    let mut rx_buffer = [0; 4096]; // TODO: Change these to either let them be reused or static in future. Look at PR 19 comment by copilot.
     let mut tx_buffer = [0; 4096];
 
     let dns = DnsSocket::new(stack);
@@ -21,7 +22,7 @@ pub async fn access_website(stack: Stack<'_>, tls_seed: u64) {
         tls_seed,
         &mut rx_buffer,
         &mut tx_buffer,
-        reqwless::client::TlsVerify::None,
+        reqwless::client::TlsVerify::None, // TODO: this should be replaced by "Certificate" later on, we need to define the final domain for that.
     );
 
     let mut client = HttpClient::new_with_tls(&tcp, &dns, tls);
@@ -41,17 +42,14 @@ pub async fn access_website(stack: Stack<'_>, tls_seed: u64) {
     let status = response.status;
     let body = response.body().read_to_end().await.unwrap();
 
+    let Ok(body_content) = core::str::from_utf8(body) else {
+        error!("Something went wrong when parsing the content");
+        return;
+    };
+
     if status.is_successful() {
-        println!(
-            "Success ({:?}): {}",
-            status,
-            core::str::from_utf8(body).unwrap()
-        );
+        println!("Success ({:?}): {}", status, body_content);
     } else {
-        println!(
-            "Error ({:?}): {}",
-            status,
-            core::str::from_utf8(body).unwrap()
-        );
+        println!("Error ({:?}): {}", status, body_content);
     }
 }
