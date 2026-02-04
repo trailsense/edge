@@ -10,9 +10,23 @@ use reqwless::{
     request::RequestBuilder,
 };
 
+const BASE_URL: &str = match option_env!("TRAILSENSE_BASE_URL") {
+    Some(v) => v,
+    None => "https://api.trailsense.daugt.com",
+};
+
+const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
+    Some(v) => v,
+    None => "1",
+};
+
 pub async fn send_data(stack: Stack<'_>, tls_seed: u64) {
-    let mut rx_buffer = [0; 4096]; // TODO: Change these to either let them be reused or static in future. Look at PR 19 comment by copilot.
+    let mut rx_buffer = [0; 4096]; // TODO: Refactor to reuse static TLS RX/TX buffers instead of allocating new ones per call, to reduce memory usage on constrained devices.
     let mut tx_buffer = [0; 4096];
+
+    let mut url = heapless::String::<128>::new();
+    use core::fmt::Write;
+    write!(&mut url, "{}/ingest/{}", BASE_URL, DEVICE_ID).unwrap();
 
     let dns = DnsSocket::new(stack);
     let tcp_state = TcpClientState::<1, 4096, 4096>::new();
@@ -29,10 +43,7 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64) {
 
     let mut buffer = [0u8; 4096];
     let mut http_req = client
-        .request(
-            reqwless::request::Method::POST,
-            "https://api.trailsense.daugt.com/ingest/1",
-        )
+        .request(reqwless::request::Method::POST, url.as_str())
         .await
         .unwrap()
         .content_type(reqwless::headers::ContentType::ApplicationJson)

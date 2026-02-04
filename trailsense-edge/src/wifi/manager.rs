@@ -11,10 +11,10 @@ pub enum WifiCmd {
     EnableSta,
 }
 
-pub enum WifiEvt {
-    Online,
-    Sniffing,
-}
+// pub enum WifiEvt { Currently unused
+//     Online,
+//     Sniffing,
+// }
 
 #[embassy_executor::task]
 pub async fn wifi_manager_task(
@@ -22,11 +22,6 @@ pub async fn wifi_manager_task(
     callback: fn(PromiscuousPkt),
     receiver: Receiver<'static, CriticalSectionRawMutex, WifiCmd, 4>,
 ) {
-    sniffer
-        .set_promiscuous_mode(true)
-        .expect("Failed to enable promiscuous mode");
-    sniffer.set_receive_cb(callback);
-    info!("Sniffer enabled, callback installed");
     loop {
         let cmd = receiver.receive().await;
         if cmd == WifiCmd::StartSniffing {
