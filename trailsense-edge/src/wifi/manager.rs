@@ -4,8 +4,6 @@ use embassy_sync::channel::Receiver;
 use esp_radio::wifi::{PromiscuousPkt, Sniffer};
 use log::info;
 
-use crate::wifi::{http, wait_for_connection};
-
 #[derive(PartialEq)]
 pub enum WifiCmd {
     StartSniffing,
@@ -35,8 +33,8 @@ pub async fn wifi_manager_task(
             sniffer
                 .set_promiscuous_mode(true)
                 .expect("Failed to enable promiscuous mode");
-            info!("Enabled Promiscuous Mode")
-            // sniffer.set_receive_cb(callback);
+            info!("Enabled Promiscuous Mode");
+            sniffer.set_receive_cb(callback);
         } else if cmd == WifiCmd::StopSniffing {
             sniffer
                 .set_promiscuous_mode(false)

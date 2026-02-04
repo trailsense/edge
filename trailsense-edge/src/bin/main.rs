@@ -61,19 +61,6 @@ async fn main(spawner: Spawner) -> ! {
     wifi::wait_for_connection(ctx.stack).await;
     wifi::http::access_website(ctx.stack, ctx.tls_seed).await;
 
-    // let mut device = interfaces.sniffer;
-
-    // device
-    //     .set_promiscuous_mode(true)
-    //     .expect("Failed to set wifi into sniffer mode");
-
-    // device.set_receive_cb(read_packet);
-
-    // let Ok(_) = spawner.spawn(send_to_backend()) else {
-    //     info!("The backend task broke on spawn");
-    //     loop {}
-    // };
-
     spawner
         .spawn(wifi::manager::wifi_manager_task(
             interfaces.sniffer,
