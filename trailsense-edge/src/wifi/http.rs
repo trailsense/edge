@@ -38,6 +38,20 @@ pub async fn access_website(stack: Stack<'_>, tls_seed: u64) {
         .body(br#"{"wifi":200,"bluetooth":10}"#.as_slice());
 
     let response = http_req.send(&mut buffer).await.unwrap();
+    let status = response.status;
     let body = response.body().read_to_end().await.unwrap();
-    println!("{}", core::str::from_utf8(body).unwrap());
+
+    if status.is_successful() {
+        println!(
+            "Success ({:?}): {}",
+            status,
+            core::str::from_utf8(body).unwrap()
+        );
+    } else {
+        println!(
+            "Error ({:?}): {}",
+            status,
+            core::str::from_utf8(body).unwrap()
+        );
+    }
 }
