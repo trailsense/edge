@@ -19,7 +19,7 @@ use esp_hal::timer::timg::TimerGroup;
 use log::info;
 use static_cell::StaticCell;
 use trailsense_edge::{
-    probe_parser::read_packet,
+    probes::probe_parser::read_packet,
     wifi::{self, manager::WifiCmd},
 };
 

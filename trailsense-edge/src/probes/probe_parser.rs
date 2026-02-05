@@ -4,9 +4,9 @@ use ieee80211::{
     GenericFrame,
     common::{FrameType, ManagementFrameSubtype},
 };
-use log::info;
+use log::warn;
 
-use crate::models::MODEL;
+use crate::{models::MODEL, probes::fingerprint_store};
 
 /// # Fingerprint Probe
 ///
@@ -50,7 +50,6 @@ fn fingerprint_probe(data: &[u8]) -> u16 {
             score -= negative_bits.count_ones() as i32;
         }
 
-        log::info!("Filter {} resulted in {}", idx, score);
         let bit = if score >= model.threshold as i32 {
             1
         } else {
@@ -58,11 +57,13 @@ fn fingerprint_probe(data: &[u8]) -> u16 {
         };
         fingerprint = (fingerprint << 1) | bit;
     }
-
+    if !fingerprint_store::push(fingerprint) {
+        warn!("Fingerprint overflow!");
+    }
     fingerprint
 }
 
-pub fn read_packet(packet: PromiscuousPkt) {
+pub fn read_packet(packet: PromiscuousPkt<'_>) {
     let Ok(frame) = GenericFrame::new(&packet.data, false) else {
         return;
     };
@@ -79,16 +80,7 @@ pub fn read_packet(packet: PromiscuousPkt) {
                         return;
                     }
                     let body = &packet.data[body_offset..];
-
-                    let fingerprint = fingerprint_probe(body);
-
-                    info!(
-                        "Source MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                        source[0], source[1], source[2], source[3], source[4], source[5]
-                    );
-                    info!("Probe body[0..16]: {:02x?}", &body[0..body.len().min(16)]);
-
-                    info!("Fingerprint: {:08b}", fingerprint);
+                    fingerprint_probe(body);
                 }
             }
         }
