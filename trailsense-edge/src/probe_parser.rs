@@ -13,6 +13,15 @@ use crate::models::MODEL;
 /// Generate a fingerprint for the given probe data using the defined filters generated with a python script.
 /// Each filter outputs a single bit, which are concatenated to form the final fingerprint.
 ///
+/// The algorithm uses weak classifiers (filters) where each classifier has:
+/// - A positive_mask: bits that contribute positively to the score
+/// - A negative_mask: bits that contribute negatively to the score
+/// - A threshold: the score threshold for classification
+///
+/// **Important**: The positive_mask and negative_mask are designed to be disjoint (non-overlapping)
+/// by the mask generation algorithm. This ensures that no bit position contributes both positively
+/// and negatively to the score, which would be logically inconsistent.
+///
 /// # Arguments
 ///
 /// * `data` - A byte slice representing the probe data to be fingerprinted.
@@ -30,6 +39,16 @@ fn fingerprint_probe(data: &[u8]) -> u16 {
         for i in 0..max_iterations {
             let positive_bits = data[i] & model.positive_mask[i];
             let negative_bits = data[i] & model.negative_mask[i];
+            
+            // Debug assertion to catch any mask generation errors during development.
+            // The masks are designed to be disjoint, so this should never trigger.
+            debug_assert_eq!(
+                model.positive_mask[i] & model.negative_mask[i],
+                0,
+                "Mask overlap detected at filter {} position {}: positive_mask={:#x}, negative_mask={:#x}",
+                idx, i, model.positive_mask[i], model.negative_mask[i]
+            );
+            
             score += positive_bits.count_ones() as i32;
             score -= negative_bits.count_ones() as i32;
         }
