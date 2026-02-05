@@ -51,6 +51,11 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
     let mut body = String::new();
     body.push('[');
     for (i, p) in packages.iter().enumerate() {
+        info!(
+            "Node ID: {}, Count: {}, Age in Seconds: {}",
+            DEVICE_ID, p.count, p.age_in_seconds
+        );
+
         if i > 0 {
             body.push(',');
         }

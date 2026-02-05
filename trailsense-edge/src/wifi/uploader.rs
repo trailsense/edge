@@ -35,7 +35,6 @@ pub async fn uploader_task(
 
         let fingerprint_snapshot = fingerprint_store::snapshot();
         let curr_count = counter::deduplicate_probes(&fingerprint_snapshot);
-        info!("Current count of people : {}", curr_count);
 
         package_store::push(curr_count).await;
 
