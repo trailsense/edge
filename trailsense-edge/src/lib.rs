@@ -1,5 +1,6 @@
 #![no_std]
 
 pub mod models;
-pub mod probe_parser;
+pub mod packages;
+pub mod probes;
 pub mod wifi;

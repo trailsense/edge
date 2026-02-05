@@ -4,7 +4,7 @@ runner = "espflash flash --monitor --monitor-baud 115200 --chip esp32"
 [env]
 ESP_LOG="info"
 TRAILSENSE_API_URL = "https://api.trailsense.daugt.com/ingest/"
-TRAILSENSE_EDGE_ID = "1"
+TRAILSENSE_EDGE_ID = "71ec4873-944e-49c1-b7c4-4b856797715f"
 
 [build]
 rustflags = [

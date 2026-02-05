@@ -2,7 +2,11 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender
 use embassy_time::{Duration, Timer, WithTimeout};
 use log::{error, info};
 
-use crate::wifi::{self, WifiCtx, manager::WifiCmd};
+use crate::{
+    packages::package_store,
+    probes::{counter, fingerprint_store},
+    wifi::{self, WifiCtx, manager::WifiCmd},
+};
 
 #[embassy_executor::task]
 pub async fn uploader_task(
@@ -11,9 +15,9 @@ pub async fn uploader_task(
 ) {
     wifi_command_sender.send(WifiCmd::StartSniffing).await;
 
-    const PERIOD: Duration = Duration::from_secs(10);
+    const PERIOD: Duration = Duration::from_secs(60);
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-    const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+    const SEND_TIMEOUT: Duration = Duration::from_secs(20);
     const RETRY_DELAY: Duration = Duration::from_millis(500);
     const SEND_ATTEMPTS: u8 = 2;
 
@@ -29,17 +33,29 @@ pub async fn uploader_task(
             continue;
         }
 
+        let fingerprint_snapshot = fingerprint_store::snapshot();
+        let curr_count = counter::deduplicate_probes(&fingerprint_snapshot);
+        info!("Current count of people : {}", curr_count);
+
+        package_store::push(curr_count).await;
+
         wifi_command_sender.send(WifiCmd::StopSniffing).await;
 
         let mut ok = false;
         for attempt in 0..SEND_ATTEMPTS {
-            if wifi::http::send_data(context.stack, context.tls_seed)
+            let packages = package_store::snapshot_with_age().await;
+
+            match wifi::http::send_data(context.stack, context.tls_seed, packages)
                 .with_timeout(SEND_TIMEOUT)
                 .await
-                .is_ok()
             {
-                ok = true;
-                break;
+                Ok(true) => {
+                    package_store::drain().await;
+                    ok = true;
+                    break;
+                }
+                Ok(false) => error!("HTTP send failed"),
+                Err(_) => error!("Package sending timed out"),
             }
 
             if attempt + 1 < SEND_ATTEMPTS {
