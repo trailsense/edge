@@ -1,7 +1,6 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use alloc::string::String;
 use embassy_net::{
     Stack,
     dns::DnsSocket,
@@ -12,6 +11,13 @@ use reqwless::{
     client::{HttpClient, TlsConfig},
     request::RequestBuilder,
 };
+
+#[derive(serde::Serialize, Debug)]
+struct PackageDto<'a> {
+    age_in_seconds: u64,
+    count: u32,
+    node_id: &'a str,
+}
 
 use crate::packages::package_store::PackageEntity;
 
@@ -48,32 +54,30 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
 
     let mut buffer = [0u8; 4096];
 
-    let mut body = String::new();
-    body.push('[');
-    for (i, p) in packages.iter().enumerate() {
-        info!(
-            "Node ID: {}, Count: {}, Age in Seconds: {}",
-            DEVICE_ID, p.count, p.age_in_seconds
-        );
+    let payload: Vec<PackageDto<'_>> = packages
+        .iter()
+        .map(|p| PackageDto {
+            age_in_seconds: p.age_in_seconds,
+            count: p.count,
+            node_id: DEVICE_ID,
+        })
+        .inspect(|dto| info!("Package: {:?}", dto))
+        .collect();
 
-        if i > 0 {
-            body.push(',');
+    let body = match serde_json::to_vec(&payload) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to serialize payload: {:?}", e);
+            return false;
         }
-        write!(
-            &mut body,
-            "{{\"age_in_seconds\":{},\"count\":{},\"node_id\":\"{}\"}}",
-            p.age_in_seconds, p.count, DEVICE_ID
-        )
-        .unwrap();
-    }
-    body.push(']');
+    };
 
     let mut http_req = client
         .request(reqwless::request::Method::POST, url.as_str())
         .await
         .unwrap()
         .content_type(reqwless::headers::ContentType::ApplicationJson)
-        .body(body.as_bytes());
+        .body(body.as_slice());
 
     let response = http_req.send(&mut buffer).await.unwrap();
     let status = response.status;

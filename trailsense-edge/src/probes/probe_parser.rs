@@ -4,7 +4,7 @@ use ieee80211::{
     GenericFrame,
     common::{FrameType, ManagementFrameSubtype},
 };
-use log::info;
+use log::warn;
 
 use crate::{models::MODEL, probes::fingerprint_store};
 
@@ -57,7 +57,9 @@ fn fingerprint_probe(data: &[u8]) -> u16 {
         };
         fingerprint = (fingerprint << 1) | bit;
     }
-    fingerprint_store::push(fingerprint);
+    if !fingerprint_store::push(fingerprint) {
+        warn!("Fingerprint overflow!");
+    }
     fingerprint
 }
 
@@ -78,8 +80,7 @@ pub fn read_packet(packet: PromiscuousPkt<'_>) {
                         return;
                     }
                     let body = &packet.data[body_offset..];
-                    let fingerprint = fingerprint_probe(body);
-                    info!("Fingerprint: {:08b}", fingerprint);
+                    fingerprint_probe(body);
                 }
             }
         }
