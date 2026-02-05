@@ -50,16 +50,29 @@ async fn main(spawner: Spawner) -> ! {
         .uninit()
         .write(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
 
-    // let _transport = BleConnector::new(radio, peripherals.BT, Default::default()).unwrap(); // Due to some misterious bug from the esp_radio, it is necessary to setup BLE, even when not in use. This issue describes how to fix it https://github.com/espressif/esp-idf/issues/13113
     let (wifi_controller, interfaces) =
         esp_radio::wifi::new(radio, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
-    let mut rng = Rng::new();
-    let ctx = wifi::init(&spawner, &mut rng, wifi_controller, interfaces.sta);
+    info!("Trailsense node is up");
+    info!("Starting Wifi Setup");
 
-    wifi::wait_for_connection(ctx.stack).await;
-    wifi::http::send_data(ctx.stack, ctx.tls_seed).await;
+    let mut rng = Rng::new();
+    let (ctx, runner) = wifi::init_stack(&mut rng, interfaces.sta);
+
+    spawner
+        .spawn(wifi::tasks::connect(wifi_controller))
+        .unwrap();
+    spawner.spawn(wifi::tasks::net_task(runner)).unwrap();
+
+    info!("Connection is up");
+
+    spawner
+        .spawn(wifi::uploader::uploader_task(
+            ctx,
+            WIFI_COMMAND_CHANNEL.sender(),
+        ))
+        .unwrap();
 
     spawner
         .spawn(wifi::manager::wifi_manager_task(
@@ -70,18 +83,7 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     loop {
-        WIFI_COMMAND_CHANNEL.send(WifiCmd::StopSniffing).await;
-        Timer::after(Duration::from_secs(10)).await;
-        WIFI_COMMAND_CHANNEL.send(WifiCmd::StartSniffing).await;
-        Timer::after(Duration::from_secs(10)).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn send_to_backend() {
-    loop {
-        info!("This is a second task");
-        Timer::after(Duration::from_millis(500)).await;
+        Timer::after(Duration::from_secs(60)).await;
     }
 }
 

@@ -3,8 +3,7 @@ use embassy_net::{
     dns::DnsSocket,
     tcp::client::{TcpClient, TcpClientState},
 };
-use esp_println::println;
-use log::error;
+use log::{error, info};
 use reqwless::{
     client::{HttpClient, TlsConfig},
     request::RequestBuilder,
@@ -59,8 +58,8 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64) {
     };
 
     if status.is_successful() {
-        println!("Success ({:?}): {}", status, body_content);
+        info!("Success ({:?}): {}", status, body_content);
     } else {
-        println!("Error ({:?}): {}", status, body_content);
+        error!("Error ({:?}): {}", status, body_content);
     }
 }

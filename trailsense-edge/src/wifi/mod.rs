@@ -1,11 +1,13 @@
-use embassy_executor::Spawner;
 use embassy_net::{DhcpConfig, Stack, StackResources};
+use embassy_time::{Duration, Timer};
 use esp_hal::rng::Rng;
-use esp_radio::wifi::{WifiController, WifiDevice};
+use esp_radio::wifi::WifiDevice;
+use log::info;
 
 pub mod http;
 pub mod manager;
 pub mod tasks;
+pub mod uploader;
 
 // Static helper from tutorial
 macro_rules! mk_static {
@@ -20,12 +22,10 @@ pub struct WifiCtx {
     pub tls_seed: u64,
 }
 
-pub fn init(
-    spawner: &Spawner,
+pub fn init_stack(
     rng: &mut Rng,
-    wifi_controller: WifiController<'static>,
     wifi_device: WifiDevice<'static>,
-) -> WifiCtx {
+) -> (WifiCtx, embassy_net::Runner<'static, WifiDevice<'static>>) {
     let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
     let tls_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
 
@@ -39,26 +39,19 @@ pub fn init(
         net_seed,
     );
 
-    // These must run for the stack to work
-    spawner.spawn(tasks::connection(wifi_controller)).unwrap();
-    spawner.spawn(tasks::net_task(runner)).unwrap();
-
-    WifiCtx { stack, tls_seed }
+    (WifiCtx { stack, tls_seed }, runner)
 }
 
 pub async fn wait_for_connection(stack: Stack<'_>) {
-    use embassy_time::{Duration, Timer};
-    use esp_println::println;
-
-    println!("Waiting for link to be up");
+    info!("Waiting for link to be up");
     while !stack.is_link_up() {
         Timer::after(Duration::from_millis(500)).await;
     }
 
-    println!("Waiting to get IP address...");
+    info!("Waiting to get IP address...");
     loop {
         if let Some(config) = stack.config_v4() {
-            println!("Got IP: {}", config.address);
+            info!("Got IP: {}", config.address);
             break;
         }
         Timer::after(Duration::from_millis(500)).await;
