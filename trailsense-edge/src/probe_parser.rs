@@ -21,22 +21,41 @@ use crate::models::MODEL;
 ///
 /// A `u16` value is returned, where each bit represents one bit of the filter.
 fn fingerprint_probe(data: &[u8]) -> u16 {
-    // Change to u32 or as needed if increasing filter size.
+    // Change to u32 or as needed if increasing filter size (with u32, 32 filters are usable).
     let mut fingerprint = 0u16;
 
     for (idx, model) in MODEL.iter().enumerate() {
-        let max_iterations = core::cmp::min(data.len(), model.mask.len());
-
-        let mut xor_result = 0u8;
-
+        let max_iterations = core::cmp::min(
+            data.len(),
+            core::cmp::min(model.positive_mask.len(), model.negative_mask.len()),
+        );
+        let mut score: i32 = 0;
         for i in 0..max_iterations {
-            if model.mask[i] != 0x00 {
-                xor_result ^= data[i]
-            }
+            let positive_bits = data[i] & model.positive_mask[i];
+            let negative_bits = data[i] & model.negative_mask[i];
+
+            // Debug assertion to catch any mask generation errors during development.
+            // The masks are designed to be disjoint, so this should never trigger.
+            debug_assert_eq!(
+                model.positive_mask[i] & model.negative_mask[i],
+                0,
+                "Mask overlap detected at filter {} position {}: positive_mask={:#x}, negative_mask={:#x}",
+                idx,
+                i,
+                model.positive_mask[i],
+                model.negative_mask[i]
+            );
+
+            score += positive_bits.count_ones() as i32;
+            score -= negative_bits.count_ones() as i32;
         }
 
-        let bit = (xor_result.count_ones() % 2) as u16;
-        log::info!("filter {} -> xor={:#04x}, bit={}", idx, xor_result, bit);
+        log::info!("Filter {} resulted in {}", idx, score);
+        let bit = if score >= model.threshold as i32 {
+            1
+        } else {
+            0
+        };
         fingerprint = (fingerprint << 1) | bit;
     }
 
