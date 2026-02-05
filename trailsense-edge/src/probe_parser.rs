@@ -21,11 +21,14 @@ use crate::models::MODEL;
 ///
 /// A `u16` value is returned, where each bit represents one bit of the filter.
 fn fingerprint_probe(data: &[u8]) -> u16 {
-    // Change to u32 or as needed if increasing filter size.
+    // Change to u32 or as needed if increasing filter size (with u32, 32 filters are usable).
     let mut fingerprint = 0u16;
 
     for (idx, model) in MODEL.iter().enumerate() {
-        let max_iterations = core::cmp::min(data.len(), model.positive_mask.len()) - 1;
+        let max_iterations = core::cmp::min(
+            data.len(),
+            core::cmp::min(model.positive_mask.len(), model.negative_mask.len()),
+        );
         let mut score: i32 = 0;
         for i in 0..max_iterations {
             let positive_bits = data[i] & model.positive_mask[i];
