@@ -52,6 +52,7 @@ pub async fn wait_for_connection(stack: Stack<'_>) {
     loop {
         if let Some(config) = stack.config_v4() {
             info!("Got IP: {}", config.address);
+            info!("DHCP DNS servers: {:?}", config.dns_servers);
             break;
         }
         Timer::after(Duration::from_millis(500)).await;

@@ -2,7 +2,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Receiver;
 
 use esp_radio::wifi::{PromiscuousPkt, Sniffer};
-use log::info;
+use log::{error, info};
 
 #[derive(PartialEq)]
 pub enum WifiCmd {
@@ -25,16 +25,18 @@ pub async fn wifi_manager_task(
     loop {
         let cmd = receiver.receive().await;
         if cmd == WifiCmd::StartSniffing {
-            sniffer
-                .set_promiscuous_mode(true)
-                .expect("Failed to enable promiscuous mode");
-            info!("Enabled Promiscuous Mode");
-            sniffer.set_receive_cb(callback);
+            match sniffer.set_promiscuous_mode(true) {
+                Ok(()) => {
+                    info!("Enabled Promiscuous Mode");
+                    sniffer.set_receive_cb(callback);
+                }
+                Err(e) => error!("Failed to enable promiscuous mode: {:?}", e),
+            }
         } else if cmd == WifiCmd::StopSniffing {
-            sniffer
-                .set_promiscuous_mode(false)
-                .expect("Failed to disable promiscuous mode");
-            info!("Disabled Promiscuous mode")
+            match sniffer.set_promiscuous_mode(false) {
+                Ok(()) => info!("Disabled Promiscuous mode"),
+                Err(e) => error!("Failed to disable promiscuous mode: {:?}", e),
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ use embassy_net::{
     dns::DnsSocket,
     tcp::client::{TcpClient, TcpClientState},
 };
+use embassy_time::{Duration, Timer};
 use log::{error, info};
 use reqwless::{
     client::{HttpClient, TlsConfig},
@@ -23,7 +24,7 @@ use crate::packages::package_store::PackageEntity;
 
 const BASE_URL: &str = match option_env!("TRAILSENSE_BASE_URL") {
     Some(v) => v,
-    None => "https://api.trailsense.daugt.com",
+    None => "https://trailsense-core-app.3pbn53.uncld.dev",
 };
 
 const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
@@ -31,13 +32,19 @@ const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
     None => "71ec4873-944e-49c1-b7c4-4b856797715f",
 };
 
+const REQUEST_BUILD_ATTEMPTS: u8 = 3;
+const REQUEST_RETRY_DELAY: Duration = Duration::from_millis(750);
+
 pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEntity>) -> bool {
     let mut rx_buffer = [0; 4096]; // TODO: Refactor to reuse static TLS RX/TX buffers instead of allocating new ones per call, to reduce memory usage on constrained devices.
     let mut tx_buffer = [0; 4096];
 
     let mut url = heapless::String::<128>::new();
     use core::fmt::Write;
-    write!(&mut url, "{}/ingest", BASE_URL).unwrap();
+    if let Err(e) = write!(&mut url, "{}/ingest", BASE_URL) {
+        error!("Failed to generate URL: {}", e);
+        return false;
+    }
 
     let dns = DnsSocket::new(stack);
     let tcp_state = TcpClientState::<1, 4096, 4096>::new();
@@ -72,16 +79,43 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
         }
     };
 
-    let mut http_req = client
-        .request(reqwless::request::Method::POST, url.as_str())
-        .await
-        .unwrap()
+    let request_builder = 'request: loop {
+        for attempt in 0..REQUEST_BUILD_ATTEMPTS {
+            match client
+                .request(reqwless::request::Method::POST, url.as_str())
+                .await
+            {
+                Ok(builder) => break 'request builder,
+                Err(e) => {
+                    error!(
+                        "Failed to build HTTP request (attempt {}/{}): {:?}",
+                        attempt + 1,
+                        REQUEST_BUILD_ATTEMPTS,
+                        e
+                    );
+                    if attempt + 1 < REQUEST_BUILD_ATTEMPTS {
+                        Timer::after(REQUEST_RETRY_DELAY).await;
+                    }
+                }
+            }
+        }
+        return false;
+    };
+
+    let mut http_req = request_builder
         .content_type(reqwless::headers::ContentType::ApplicationJson)
         .body(body.as_slice());
 
-    let response = http_req.send(&mut buffer).await.unwrap();
+    let Ok(response) = http_req.send(&mut buffer).await else {
+        error!("Something went wrong with the body of the response");
+        return false;
+    };
+
     let status = response.status;
-    let body = response.body().read_to_end().await.unwrap();
+    let Ok(body) = response.body().read_to_end().await else {
+        error!("Something went wrong with the body of the response");
+        return false;
+    };
 
     let Ok(body_content) = core::str::from_utf8(body) else {
         error!("Something went wrong when parsing the content");
@@ -90,9 +124,9 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
 
     if status.is_successful() {
         info!("Success ({:?}): {}", status, body_content);
-        return true;
+        true
     } else {
         error!("Error ({:?}): {}", status, body_content);
-        return false;
+        false
     }
 }

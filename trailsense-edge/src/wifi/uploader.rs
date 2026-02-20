@@ -15,10 +15,11 @@ pub async fn uploader_task(
 ) {
     wifi_command_sender.send(WifiCmd::StartSniffing).await;
 
-    const PERIOD: Duration = Duration::from_secs(60);
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-    const SEND_TIMEOUT: Duration = Duration::from_secs(20);
+    const PERIOD: Duration = Duration::from_secs(300);
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+    const SEND_TIMEOUT: Duration = Duration::from_secs(30);
     const RETRY_DELAY: Duration = Duration::from_millis(500);
+    const RADIO_SETTLE_DELAY: Duration = Duration::from_secs(1);
     const SEND_ATTEMPTS: u8 = 2;
 
     loop {
@@ -39,6 +40,7 @@ pub async fn uploader_task(
         fingerprint_store::drain();
 
         wifi_command_sender.send(WifiCmd::StopSniffing).await;
+        Timer::after(RADIO_SETTLE_DELAY).await;
 
         let mut ok = false;
         for attempt in 0..SEND_ATTEMPTS {

@@ -16,7 +16,7 @@ use esp_hal::rng::Rng;
 
 use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
-use log::info;
+use log::{error, info};
 use static_cell::StaticCell;
 use trailsense_edge::{
     probes::probe_parser::read_packet,
@@ -60,27 +60,30 @@ async fn main(spawner: Spawner) -> ! {
     let mut rng = Rng::new();
     let (ctx, runner) = wifi::init_stack(&mut rng, interfaces.sta);
 
-    spawner
-        .spawn(wifi::tasks::connect(wifi_controller))
-        .unwrap();
-    spawner.spawn(wifi::tasks::net_task(runner)).unwrap();
+    if let Err(e) = spawner.spawn(wifi::tasks::connect(wifi_controller)) {
+        error!("Failed to spawn connection task: {}", e);
+    }
+
+    if let Err(e) = spawner.spawn(wifi::tasks::net_task(runner)) {
+        error!("Failed to spawn net task: {}", e);
+    }
 
     info!("Connection is up");
 
-    spawner
-        .spawn(wifi::uploader::uploader_task(
-            ctx,
-            WIFI_COMMAND_CHANNEL.sender(),
-        ))
-        .unwrap();
+    if let Err(e) = spawner.spawn(wifi::uploader::uploader_task(
+        ctx,
+        WIFI_COMMAND_CHANNEL.sender(),
+    )) {
+        error!("Failed to spawn uploader task: {}", e);
+    }
 
-    spawner
-        .spawn(wifi::manager::wifi_manager_task(
-            interfaces.sniffer,
-            read_packet,
-            WIFI_COMMAND_CHANNEL.receiver(),
-        ))
-        .unwrap();
+    if let Err(e) = spawner.spawn(wifi::manager::wifi_manager_task(
+        interfaces.sniffer,
+        read_packet,
+        WIFI_COMMAND_CHANNEL.receiver(),
+    )) {
+        error!("Failed to spawn wifi manager task: {}", e);
+    }
 
     loop {
         Timer::after(Duration::from_secs(60)).await;
