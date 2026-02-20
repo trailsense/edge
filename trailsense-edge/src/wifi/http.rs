@@ -88,7 +88,8 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
                 Ok(builder) => break 'request builder,
                 Err(e) => {
                     error!(
-                        "Failed to build HTTP request (attempt {}/{}): {:?}",
+                        "Failed to build HTTP request: url='{}', attempt {}/{}, err={:?}",
+                        url.as_str(),
                         attempt + 1,
                         REQUEST_BUILD_ATTEMPTS,
                         e
@@ -106,20 +107,45 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
         .content_type(reqwless::headers::ContentType::ApplicationJson)
         .body(body.as_slice());
 
-    let Ok(response) = http_req.send(&mut buffer).await else {
-        error!("Something went wrong with the body of the response");
-        return false;
+    let response = match http_req.send(&mut buffer).await {
+        Ok(r) => r,
+        Err(e) => {
+            error!(
+                "HTTP POST send failed: url='{}', payload_len={}, err={:?}",
+                url.as_str(),
+                body.len(),
+                e
+            );
+            return false;
+        }
     };
 
     let status = response.status;
-    let Ok(body) = response.body().read_to_end().await else {
-        error!("Something went wrong with the body of the response");
-        return false;
+    let body = match response.body().read_to_end().await {
+        Ok(b) => b,
+        Err(e) => {
+            error!(
+                "HTTP response read failed: url='{}', status={:?}, err={:?}",
+                url.as_str(),
+                status,
+                e
+            );
+            return false;
+        }
     };
 
-    let Ok(body_content) = core::str::from_utf8(body) else {
-        error!("Something went wrong when parsing the content");
-        return false;
+    let body_content = match core::str::from_utf8(body) {
+        Ok(s) => s,
+        Err(e) => {
+            error!(
+                "HTTP response UTF-8 decode failed: url='{}', status={:?}, body_len={}, err={:?}",
+                url.as_str(),
+                status,
+                body.len(),
+                e
+            );
+            return false;
+        }
     };
 
     if status.is_successful() {

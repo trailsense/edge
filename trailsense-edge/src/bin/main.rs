@@ -31,11 +31,19 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 static WIFI_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, WifiCmd, 4> = Channel::new();
+const INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
+const FATAL_SLEEP: Duration = Duration::from_secs(1);
 
 #[allow(
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
+
+async fn fatal_idle() -> ! {
+    loop {
+        Timer::after(FATAL_SLEEP).await;
+    }
+}
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     // generator version: 1.1.0
@@ -46,13 +54,29 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
-    let radio = RADIO_CELL
-        .uninit()
-        .write(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
+    let radio_init = loop {
+        match esp_radio::init() {
+            Ok(r) => break r,
+            Err(e) => {
+                error!(
+                    "Failed to initialize Wi-Fi/BLE controller; retrying in {:?}: {:?}",
+                    INIT_RETRY_DELAY, e
+                );
+                Timer::after(INIT_RETRY_DELAY).await;
+            }
+        }
+    };
+
+    let radio = RADIO_CELL.uninit().write(radio_init);
 
     let (wifi_controller, interfaces) =
-        esp_radio::wifi::new(radio, peripherals.WIFI, Default::default())
-            .expect("Failed to initialize Wi-Fi controller");
+        match esp_radio::wifi::new(radio, peripherals.WIFI, Default::default()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("Failed to initialize Wi-Fi controller (fatal): {:?}", e);
+                fatal_idle().await;
+            }
+        };
 
     info!("Trailsense node is up");
     info!("Starting Wifi Setup");

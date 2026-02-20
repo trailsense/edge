@@ -15,7 +15,7 @@ pub async fn uploader_task(
 ) {
     wifi_command_sender.send(WifiCmd::StartSniffing).await;
 
-    const PERIOD: Duration = Duration::from_secs(300);
+    const PERIOD: Duration = Duration::from_secs(20);
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
     const RETRY_DELAY: Duration = Duration::from_millis(500);
