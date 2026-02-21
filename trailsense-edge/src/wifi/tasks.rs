@@ -46,8 +46,17 @@ pub async fn connect(mut controller: WifiController<'static>) {
                     .with_password(password.into()),
             );
 
-            controller.set_config(&client_config).unwrap();
-            controller.start_async().await.unwrap();
+            if let Err(e) = controller.set_config(&client_config) {
+                error!("Failed to configure wifi client: {:?}", e);
+                Timer::after(Duration::from_millis(5000)).await;
+                continue;
+            }
+
+            if let Err(e) = controller.start_async().await {
+                error!("Failed to start wifi controller: {:?}", e);
+                Timer::after(Duration::from_millis(5000)).await;
+                continue;
+            }
         }
 
         match controller.connect_async().await {
