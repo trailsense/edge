@@ -23,6 +23,7 @@ pub async fn uploader_task(
     const RADIO_SETTLE_DELAY: Duration = Duration::from_secs(5);
     const SEND_ATTEMPTS: u8 = 2;
     const DNS_RECONNECT_THRESHOLD: u8 = 2;
+    const DNS_RESTART_THRESHOLD: u8 = 4;
     let mut consecutive_dns_failures: u8 = 0;
 
     loop {
@@ -74,13 +75,21 @@ pub async fn uploader_task(
 
         if saw_dns_failure {
             consecutive_dns_failures = consecutive_dns_failures.saturating_add(1);
-            if consecutive_dns_failures >= DNS_RECONNECT_THRESHOLD {
+            if consecutive_dns_failures >= DNS_RESTART_THRESHOLD {
+                error!(
+                    "Consecutive DNS failures reached {}; restarting Wi-Fi controller",
+                    DNS_RESTART_THRESHOLD
+                );
+                wifi_control_sender
+                    .send(WifiControlCmd::RestartController)
+                    .await;
+                consecutive_dns_failures = 0;
+            } else if consecutive_dns_failures >= DNS_RECONNECT_THRESHOLD {
                 error!(
                     "Consecutive DNS failures reached {}; forcing Wi-Fi reconnect",
                     DNS_RECONNECT_THRESHOLD
                 );
                 wifi_control_sender.send(WifiControlCmd::Reconnect).await;
-                consecutive_dns_failures = 0;
             }
         } else if ok {
             consecutive_dns_failures = 0;

@@ -9,10 +9,12 @@ const PASSWORD: Option<&'static str> = option_env!("WIFI_PASSWORD");
 const WIFI_RETRY_DELAY: Duration = Duration::from_secs(5);
 const WIFI_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const RECONNECT_SETTLE_DELAY: Duration = Duration::from_secs(2);
+const RESTART_SETTLE_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum WifiControlCmd {
     Reconnect,
+    RestartController,
 }
 
 #[embassy_executor::task]
@@ -51,6 +53,15 @@ pub async fn connect(
                     error!("Failed to disconnect Wi-Fi during reconnect: {:?}", e);
                 }
                 Timer::after(RECONNECT_SETTLE_DELAY).await;
+            } else if cmd == WifiControlCmd::RestartController {
+                info!("Wi-Fi controller restart requested");
+                if let Err(e) = controller.disconnect_async().await {
+                    error!("Failed to disconnect Wi-Fi before restart: {:?}", e);
+                }
+                if let Err(e) = controller.stop_async().await {
+                    error!("Failed to stop Wi-Fi controller: {:?}", e);
+                }
+                Timer::after(RESTART_SETTLE_DELAY).await;
             }
         }
 
