@@ -35,7 +35,18 @@ const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
 const REQUEST_BUILD_ATTEMPTS: u8 = 3;
 const REQUEST_RETRY_DELAY: Duration = Duration::from_millis(750);
 
-pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEntity>) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SendDataOutcome {
+    Success,
+    DnsFailure,
+    Failure,
+}
+
+pub async fn send_data(
+    stack: Stack<'_>,
+    tls_seed: u64,
+    packages: Vec<PackageEntity>,
+) -> SendDataOutcome {
     let mut rx_buffer = [0; 4096]; // TODO: Refactor to reuse static TLS RX/TX buffers instead of allocating new ones per call, to reduce memory usage on constrained devices.
     let mut tx_buffer = [0; 4096];
 
@@ -43,7 +54,7 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
     use core::fmt::Write;
     if let Err(e) = write!(&mut url, "{}/ingest", BASE_URL) {
         error!("Failed to generate URL: {}", e);
-        return false;
+        return SendDataOutcome::Failure;
     }
 
     let dns = DnsSocket::new(stack);
@@ -75,7 +86,7 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
         Ok(v) => v,
         Err(e) => {
             error!("Failed to serialize payload: {:?}", e);
-            return false;
+            return SendDataOutcome::Failure;
         }
     };
 
@@ -94,13 +105,16 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
                         REQUEST_BUILD_ATTEMPTS,
                         e
                     );
+                    if matches!(e, reqwless::Error::Dns) {
+                        return SendDataOutcome::DnsFailure;
+                    }
                     if attempt + 1 < REQUEST_BUILD_ATTEMPTS {
                         Timer::after(REQUEST_RETRY_DELAY).await;
                     }
                 }
             }
         }
-        return false;
+        return SendDataOutcome::Failure;
     };
 
     let mut http_req = request_builder
@@ -116,7 +130,10 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
                 body.len(),
                 e
             );
-            return false;
+            if matches!(e, reqwless::Error::Dns) {
+                return SendDataOutcome::DnsFailure;
+            }
+            return SendDataOutcome::Failure;
         }
     };
 
@@ -130,7 +147,7 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
                 status,
                 e
             );
-            return false;
+            return SendDataOutcome::Failure;
         }
     };
 
@@ -144,15 +161,15 @@ pub async fn send_data(stack: Stack<'_>, tls_seed: u64, packages: Vec<PackageEnt
                 body.len(),
                 e
             );
-            return false;
+            return SendDataOutcome::Failure;
         }
     };
 
     if status.is_successful() {
         info!("Success ({:?}): {}", status, body_content);
-        true
+        SendDataOutcome::Success
     } else {
         error!("Error ({:?}): {}", status, body_content);
-        false
+        SendDataOutcome::Failure
     }
 }

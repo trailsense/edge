@@ -20,7 +20,7 @@ use log::{error, info};
 use static_cell::StaticCell;
 use trailsense_edge::{
     probes::probe_parser::read_packet,
-    wifi::{self, manager::WifiCmd},
+    wifi::{self, manager::WifiCmd, tasks::WifiControlCmd},
 };
 
 extern crate alloc;
@@ -31,6 +31,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 static WIFI_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, WifiCmd, 4> = Channel::new();
+static WIFI_CONTROL_CHANNEL: Channel<CriticalSectionRawMutex, WifiControlCmd, 4> = Channel::new();
 const INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 const FATAL_SLEEP: Duration = Duration::from_secs(1);
 
@@ -84,7 +85,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut rng = Rng::new();
     let (ctx, runner) = wifi::init_stack(&mut rng, interfaces.sta);
 
-    if let Err(e) = spawner.spawn(wifi::tasks::connect(wifi_controller)) {
+    if let Err(e) = spawner.spawn(wifi::tasks::connect(
+        wifi_controller,
+        WIFI_CONTROL_CHANNEL.receiver(),
+    )) {
         error!("Failed to spawn connection task: {}", e);
     }
 
@@ -97,6 +101,7 @@ async fn main(spawner: Spawner) -> ! {
     if let Err(e) = spawner.spawn(wifi::uploader::uploader_task(
         ctx,
         WIFI_COMMAND_CHANNEL.sender(),
+        WIFI_CONTROL_CHANNEL.sender(),
     )) {
         error!("Failed to spawn uploader task: {}", e);
     }
