@@ -36,7 +36,7 @@ pub async fn uploader_task(
 
         let fingerprint_snapshot = fingerprint_store::snapshot();
         let curr_count = counter::deduplicate_probes(&fingerprint_snapshot);
-        package_store::push(curr_count).await; // TODO: implement limit to avoid buffer overflow of http request. Basically use chunking.
+        package_store::push(curr_count); // TODO: implement limit to avoid buffer overflow of http request. Basically use chunking.
         fingerprint_store::drain();
 
         wifi_command_sender.send(WifiCmd::StopSniffing).await;
@@ -44,14 +44,14 @@ pub async fn uploader_task(
 
         let mut ok = false;
         for attempt in 0..SEND_ATTEMPTS {
-            let packages = package_store::snapshot_with_age().await;
+            let packages = package_store::snapshot_with_age();
 
             match wifi::http::send_data(context.stack, context.tls_seed, packages)
                 .with_timeout(SEND_TIMEOUT)
                 .await
             {
                 Ok(true) => {
-                    package_store::drain().await;
+                    package_store::drain();
                     ok = true;
                     break;
                 }

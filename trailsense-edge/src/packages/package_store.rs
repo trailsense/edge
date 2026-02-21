@@ -34,19 +34,14 @@ const MAX_PACKAGES: usize = 64;
 static PACKAGES: Mutex<CriticalSectionRawMutex, RefCell<HeaplessVec<PackageEntity, MAX_PACKAGES>>> =
     Mutex::new(RefCell::new(HeaplessVec::new()));
 
-pub async fn push(count: u32) -> bool {
+pub fn push(count: u32) -> bool {
     PACKAGES.lock(|v| {
         let mut packages = v.borrow_mut();
-        let entity = PackageEntity::new(count);
-
-        if packages.push(entity).is_ok() {
-            return true;
-        }
 
         // Evict oldest buffered package to keep a bounded queue.
         // TODO: think about better solution, chunking, deleting values in between? Drop a few 0 count values?
         // Thought appeared on 20.02.2026 --> If is 0, do delete it, only if enough other values are around it maybe?ß
-        if !packages.is_empty() {
+        if packages.is_full() {
             packages.remove(0);
         }
 
@@ -54,7 +49,7 @@ pub async fn push(count: u32) -> bool {
     })
 }
 
-pub async fn snapshot_with_age() -> Vec<PackageEntity> {
+pub fn snapshot_with_age() -> Vec<PackageEntity> {
     PACKAGES.lock(|v| {
         let mut packages = v.borrow_mut();
         for p in packages.iter_mut() {
@@ -64,6 +59,6 @@ pub async fn snapshot_with_age() -> Vec<PackageEntity> {
     })
 }
 
-pub async fn drain() {
+pub fn drain() {
     PACKAGES.lock(|v| v.borrow_mut().clear());
 }

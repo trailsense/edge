@@ -22,9 +22,9 @@ struct PackageDto<'a> {
 
 use crate::packages::package_store::PackageEntity;
 
-const BASE_URL: &str = match option_env!("TRAILSENSE_BASE_URL") {
+const BASE_URL: &str = match option_env!("TRAILSENSE_API_URL") {
     Some(v) => v,
-    None => "https://trailsense-core-app.3pbn53.uncld.dev",
+    None => "https://api.trailsense.daugt.com",
 };
 
 const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
