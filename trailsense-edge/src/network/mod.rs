@@ -5,6 +5,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 pub mod factory;
+pub mod active_transport;
 pub mod types;
 pub mod uploader;
 pub mod wifi;

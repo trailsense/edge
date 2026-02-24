@@ -1,6 +1,6 @@
 #[cfg(feature = "uplink-wifi")]
 use crate::wifi::tasks::WifiControlCmd;
-use crate::{network::types::ActiveTransport, wifi::WifiCtx};
+use crate::{network::active_transport::ActiveTransport, wifi::WifiCtx};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender};
 
 #[cfg(feature = "uplink-wifi")]
@@ -10,7 +10,6 @@ pub fn build_active_transport(
 ) -> ActiveTransport {
     use crate::network::wifi::transport::{WifiTransport, WifiTransportConfig};
 
-    let ctx = ctx;
     let config = WifiTransportConfig::default();
     return ActiveTransport::Wifi(WifiTransport::new(ctx, config, wifi_control_sender));
 }
