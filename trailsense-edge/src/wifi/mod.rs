@@ -4,10 +4,8 @@ use esp_hal::rng::Rng;
 use esp_radio::wifi::WifiDevice;
 use log::info;
 
-pub mod http;
 pub mod manager;
 pub mod tasks;
-pub mod uploader;
 
 // Static helper from tutorial
 macro_rules! mk_static {
