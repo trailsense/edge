@@ -112,13 +112,14 @@ impl UplinkTransport for WifiTransport {
                 .send(WifiControlCmd::RestartController)
                 .await;
             self.consecutive_dns_failures = 0;
-            return SendDataOutcome::RetryableFailure;
-        } else if self.consecutive_dns_failures >= self.dns_reconnect_threshold {
+            return SendDataOutcome::BackoffRequired;
+        }
+        if self.consecutive_dns_failures >= self.dns_reconnect_threshold {
             self.recovery_pending = true;
             self.wifi_control_sender
                 .send(WifiControlCmd::Reconnect)
                 .await;
-            return SendDataOutcome::RetryableFailure;
+            return SendDataOutcome::BackoffRequired;
         }
 
         let mut rx_buffer = [0; 4096]; // TODO: Refactor to reuse static TLS RX/TX buffers instead of allocating new ones per call, to reduce memory usage on constrained devices.
