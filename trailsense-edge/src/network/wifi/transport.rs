@@ -58,6 +58,7 @@ pub struct WifiTransport {
     consecutive_dns_failures: u8,
     dns_restart_threshold: u8,
     wifi_control_sender: Sender<'static, CriticalSectionRawMutex, WifiControlCmd, 4>,
+    recovery_pending: bool,
 }
 
 impl WifiTransport {
@@ -70,6 +71,7 @@ impl WifiTransport {
             stack: context.stack,
             tls_seed: context.tls_seed,
             consecutive_dns_failures: 0,
+            recovery_pending: false,
             dns_reconnect_threshold: config.dns_reconnect_threshold,
             dns_restart_threshold: config.dns_restart_threshold,
             wifi_control_sender: wifi_control_sender,
@@ -78,8 +80,10 @@ impl WifiTransport {
 }
 
 impl UplinkTransport for WifiTransport {
-    async fn ensure_connected(&mut self) -> crate::network::types::ConnectionOutcome {
+    async fn ensure_connected(&mut self) -> ConnectionOutcome {
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+        let was_recovering = self.recovery_pending;
 
         if wait_for_connection(self.stack)
             .with_timeout(CONNECT_TIMEOUT)
@@ -87,23 +91,34 @@ impl UplinkTransport for WifiTransport {
             .is_err()
         {
             error!("WiFi connection timeout");
-            return ConnectionOutcome::Failure;
+            return ConnectionOutcome::Disconnected;
+        }
+
+        if was_recovering {
+            info!("WiFi recovery completed");
+            self.recovery_pending = false;
         }
 
         ConnectionOutcome::Connected
     }
-
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
+        if self.recovery_pending {
+            return SendDataOutcome::RetryableFailure;
+        }
+
         if self.consecutive_dns_failures >= self.dns_restart_threshold {
+            self.recovery_pending = true;
             self.wifi_control_sender
                 .send(WifiControlCmd::RestartController)
                 .await;
             self.consecutive_dns_failures = 0;
+            return SendDataOutcome::RetryableFailure;
         } else if self.consecutive_dns_failures >= self.dns_reconnect_threshold {
+            self.recovery_pending = true;
             self.wifi_control_sender
                 .send(WifiControlCmd::Reconnect)
                 .await;
-            self.consecutive_dns_failures = 0;
+            return SendDataOutcome::RetryableFailure;
         }
 
         let mut rx_buffer = [0; 4096]; // TODO: Refactor to reuse static TLS RX/TX buffers instead of allocating new ones per call, to reduce memory usage on constrained devices.
