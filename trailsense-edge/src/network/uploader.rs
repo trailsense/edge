@@ -5,7 +5,7 @@ use embassy_time::{Duration, Timer, WithTimeout};
 use log::{error, info};
 
 use crate::{
-    network::types::{ActiveTransport, SendDataOutcome},
+    network::{active_transport::ActiveTransport, types::SendDataOutcome},
     packages::package_store,
     probes::{counter, fingerprint_store},
     wifi::manager::WifiCmd,
@@ -65,6 +65,12 @@ pub async fn uploader_task(
                 Ok(SendDataOutcome::FatalFailure) => {
                     error!("HTTP send failed");
                     ok = false;
+                    break;
+                }
+                Ok(SendDataOutcome::BackoffRequired) => {
+                    info!(
+                        "Transport recovery/backoff in progress; skipping remaining attempts this cycle"
+                    );
                     break;
                 }
                 Err(_) => error!("Package sending timed out"),
