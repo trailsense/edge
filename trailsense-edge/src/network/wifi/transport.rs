@@ -97,13 +97,14 @@ impl UplinkTransport for WifiTransport {
         if was_recovering {
             info!("WiFi recovery completed");
             self.recovery_pending = false;
+            self.consecutive_dns_failures = 0;
         }
 
         ConnectionOutcome::Connected
     }
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
         if self.recovery_pending {
-            return SendDataOutcome::RetryableFailure;
+            return SendDataOutcome::BackoffRequired;
         }
 
         if self.consecutive_dns_failures >= self.dns_restart_threshold {

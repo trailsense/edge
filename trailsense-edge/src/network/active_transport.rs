@@ -16,6 +16,7 @@ pub enum ActiveTransport {
     Wifi(WifiTransport),
 }
 
+#[cfg(feature = "uplink-wifi")]
 impl UplinkTransport for ActiveTransport {
     async fn ensure_connected(&mut self) -> ConnectionOutcome {
         match self {

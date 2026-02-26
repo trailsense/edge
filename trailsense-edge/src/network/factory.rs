@@ -1,6 +1,8 @@
+use crate::network::active_transport::ActiveTransport;
+#[cfg(feature = "uplink-wifi")]
+use crate::wifi::WifiCtx;
 #[cfg(feature = "uplink-wifi")]
 use crate::wifi::tasks::WifiControlCmd;
-use crate::{network::active_transport::ActiveTransport, wifi::WifiCtx};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender};
 
 #[cfg(feature = "uplink-wifi")]
