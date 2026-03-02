@@ -87,3 +87,8 @@ incremental      = false
 lto              = 'fat'
 opt-level        = 's'
 overflow-checks  = false
+
+[features]
+default = ["uplink-wifi"]
+uplink-wifi = []
+uplink-gsm = []

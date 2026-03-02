@@ -6,7 +6,7 @@ use ieee80211::{
 };
 use log::warn;
 
-use crate::{models::MODEL, probes::fingerprint_store};
+use crate::probes::{fingerprint_store, models::MODEL};
 
 /// # Fingerprint Probe
 ///

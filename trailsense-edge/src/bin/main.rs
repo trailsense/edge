@@ -19,6 +19,7 @@ use esp_hal::timer::timg::TimerGroup;
 use log::{error, info};
 use static_cell::StaticCell;
 use trailsense_edge::{
+    network::{self, factory::build_active_transport},
     probes::probe_parser::read_packet,
     wifi::{self, manager::WifiCmd, tasks::WifiControlCmd},
 };
@@ -98,10 +99,12 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Connection is up");
 
-    if let Err(e) = spawner.spawn(wifi::uploader::uploader_task(
-        ctx,
+    #[cfg(feature = "uplink-wifi")]
+    let transport = build_active_transport(ctx, WIFI_CONTROL_CHANNEL.sender());
+
+    if let Err(e) = spawner.spawn(network::uploader::uploader_task(
+        transport,
         WIFI_COMMAND_CHANNEL.sender(),
-        WIFI_CONTROL_CHANNEL.sender(),
     )) {
         error!("Failed to spawn uploader task: {}", e);
     }
