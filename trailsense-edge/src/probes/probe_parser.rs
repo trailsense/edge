@@ -1,8 +1,9 @@
 extern crate alloc;
 use esp_radio::wifi::PromiscuousPkt;
 use ieee80211::{
-    GenericFrame,
-    common::{FrameType, ManagementFrameSubtype},
+    common::{FrameControlField, FrameType, ManagementFrameSubtype},
+    mgmt_frame::{ProbeRequestFrame, body::HasElements},
+    scroll::Pread,
 };
 use log::warn;
 
@@ -64,25 +65,28 @@ fn fingerprint_probe(data: &[u8]) -> u16 {
 }
 
 pub fn read_packet(packet: PromiscuousPkt<'_>) {
-    let Ok(frame) = GenericFrame::new(&packet.data, false) else {
+    if packet.data.len() < 2 {
+        return;
+    }
+
+    let fcf_bits = u16::from_le_bytes([packet.data[0], packet.data[1]]);
+    let fcf = FrameControlField::from_bits(fcf_bits);
+    if !matches!(
+        fcf.frame_type(),
+        FrameType::Management(ManagementFrameSubtype::ProbeRequest)
+    ) {
+        return;
+    }
+
+    let Ok(probe_req) = packet.data.pread_with::<ProbeRequestFrame>(0, false) else {
         return;
     };
 
-    if let Some(source) = frame.address_2() {
-        if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
+    let source = probe_req.header.transmitter_address;
+    if !((source[0] == 84 && source[1] == 138 && source[2] == 186) // FOR TESTING PURPOSES: Filter out both CISCO and ESPRESSIF MAC-Addresses, to visualize "normal" devices
             || (source[0] == 52 && source[1] == 152 && source[2] == 122) || (source[0] == 112 && source[1] == 211 && source[2] == 121) || (source[0] == 16 && source[1] == 60 && source[2] == 89))
-        {
-            let fc = frame.frame_control_field();
-            if let FrameType::Management(subtype) = fc.frame_type() {
-                if subtype == ManagementFrameSubtype::ProbeRequest {
-                    let body_offset = 24;
-                    if packet.data.len() < body_offset {
-                        return;
-                    }
-                    let body = &packet.data[body_offset..];
-                    fingerprint_probe(body);
-                }
-            }
-        }
+    {
+        let elements = probe_req.body.get_elements();
+        fingerprint_probe(elements.bytes);
     }
 }

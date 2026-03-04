@@ -16,7 +16,7 @@ pub async fn uploader_task(
     mut transport: ActiveTransport,
     wifi_command_sender: Sender<'static, CriticalSectionRawMutex, WifiCmd, 4>,
 ) {
-    const PERIOD: Duration = Duration::from_secs(20);
+    const PERIOD: Duration = Duration::from_secs(180); // Change for testing reasons.
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
     const RETRY_DELAY: Duration = Duration::from_millis(500);
     const RADIO_SETTLE_DELAY: Duration = Duration::from_secs(5);
