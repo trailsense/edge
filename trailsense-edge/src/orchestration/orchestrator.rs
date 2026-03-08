@@ -5,10 +5,10 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender, pubsub::Subscriber,
 };
 use embassy_time::{Duration, Timer};
-use log::error;
+use log::{debug, error, info};
 
 use crate::orchestration::types::{
-    DataEvents, SnifferEvents, SystemCmd, SystemEvents, SystemState, UploadEvents,
+    CorrelationId, DataEvents, SnifferEvents, SystemCmd, SystemEvents, SystemState, UploadEvents,
 };
 
 const PERIOD: Duration = Duration::from_secs(180); // Change for testing reasons.
@@ -42,7 +42,7 @@ where
                     return WaitResult::Matched(v);
                 } else {
                     // unrelated event from mixed stream; ignore
-                    log::debug!("Ignoring unrelated event while waiting");
+                    debug!("FSM: ignored unrelated event while waiting");
                 }
             }
         }
@@ -66,6 +66,14 @@ pub async fn orchestrate_node(
     let mut network_error_count = 0;
     let mut save_failure_count = 0;
     let mut network_fallback_count = 0;
+
+    let mut next_id: u32 = 1;
+    let mut new_id = || {
+        let id = CorrelationId(next_id);
+        next_id = next_id.wrapping_add(1);
+        id
+    };
+
     loop {
         match current_state {
             SystemState::Idle => {
@@ -73,18 +81,29 @@ pub async fn orchestrate_node(
                 current_state = SystemState::Sniffing;
             }
             SystemState::Sniffing => {
-                sniffer_sender.send(SystemCmd::StartSniffing).await;
+                let id = new_id();
+                info!("FSM: state=Sniffing send StartSniffing id={}", id.0);
+                sniffer_sender.send(SystemCmd::StartSniffing { id }).await;
 
                 match wait_for(&mut event_subscriber, GENERAL_TIMEOUT, |e| match e {
-                    SystemEvents::Sniffer(SnifferEvents::StartedSniffing) => Some(true),
-                    SystemEvents::Sniffer(SnifferEvents::SniffingError) => Some(false),
+                    SystemEvents::Sniffer {
+                        id: ev_id,
+                        event: SnifferEvents::StartedSniffing,
+                    } if ev_id == id => Some(true),
+                    SystemEvents::Sniffer {
+                        id: ev_id,
+                        event: SnifferEvents::SniffingError,
+                    } if ev_id == id => Some(false),
                     _ => None,
                 })
                 .await
                 {
                     WaitResult::Matched(true) => {
                         match wait_for(&mut event_subscriber, PERIOD, |e| match e {
-                            SystemEvents::Sniffer(SnifferEvents::SniffingError) => Some(()),
+                            SystemEvents::Sniffer {
+                                id: ev_id,
+                                event: SnifferEvents::SniffingError,
+                            } if ev_id == id => Some(()),
                             _ => None,
                         })
                         .await
@@ -99,11 +118,19 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::PreparingUpload => {
-                sniffer_sender.send(SystemCmd::StopSniffing).await;
+                let id = new_id();
+                info!("FSM: state=PreparingUpload send StopSniffing id={}", id.0);
+                sniffer_sender.send(SystemCmd::StopSniffing { id }).await;
 
                 match wait_for(&mut event_subscriber, STOP_SNIFF_TIMEOUT, |e| match e {
-                    SystemEvents::Sniffer(SnifferEvents::StoppedSniffing) => Some(true),
-                    SystemEvents::Sniffer(SnifferEvents::SniffingError) => Some(false),
+                    SystemEvents::Sniffer {
+                        id: ev_id,
+                        event: SnifferEvents::StoppedSniffing,
+                    } if ev_id == id => Some(true),
+                    SystemEvents::Sniffer {
+                        id: ev_id,
+                        event: SnifferEvents::SniffingError,
+                    } if ev_id == id => Some(false),
                     _ => None,
                 })
                 .await
@@ -114,11 +141,22 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::Connecting => {
-                network_sender.send(SystemCmd::Connect).await;
+                let id = new_id();
+                info!(
+                    "FSM: state=Connecting send Connect id={} retry={}",
+                    id.0, network_error_count
+                );
+                network_sender.send(SystemCmd::Connect { id }).await;
 
                 match wait_for(&mut event_subscriber, CONNECT_TIMEOUT, |e| match e {
-                    SystemEvents::Upload(UploadEvents::NetworkConnected) => Some(true),
-                    SystemEvents::Upload(UploadEvents::NetworkError) => Some(false),
+                    SystemEvents::Upload {
+                        id: ev_id,
+                        event: UploadEvents::NetworkConnected,
+                    } if ev_id == id => Some(true),
+                    SystemEvents::Upload {
+                        id: ev_id,
+                        event: UploadEvents::NetworkError,
+                    } if ev_id == id => Some(false),
                     _ => None,
                 })
                 .await
@@ -129,17 +167,32 @@ pub async fn orchestrate_node(
                         current_state = if network_error_count >= NETWORK_LIMIT {
                             SystemState::SavingData
                         } else {
-                            SystemState::Sniffing
+                            Timer::after(Duration::from_secs(2)).await;
+                            SystemState::Connecting
                         };
                     }
                 }
             }
             SystemState::Uploading => {
-                network_sender.send(SystemCmd::UploadData).await;
+                let id = new_id();
+                info!(
+                    "FSM: state=Uploading send UploadData id={} retry={}",
+                    id.0, network_error_count
+                );
+                network_sender.send(SystemCmd::UploadData { id }).await;
                 match wait_for(&mut event_subscriber, UPLOAD_TIMEOUT, |e| match e {
-                    SystemEvents::Upload(UploadEvents::UploadSuccessfull) => Some(Ok(())),
-                    SystemEvents::Upload(UploadEvents::UploadError)
-                    | SystemEvents::Upload(UploadEvents::NetworkError) => Some(Err(())),
+                    SystemEvents::Upload {
+                        id: ev_id,
+                        event: UploadEvents::UploadSuccessful,
+                    } if ev_id == id => Some(Ok(())),
+                    SystemEvents::Upload {
+                        id: ev_id,
+                        event: UploadEvents::UploadError,
+                    }
+                    | SystemEvents::Upload {
+                        id: ev_id,
+                        event: UploadEvents::NetworkError,
+                    } if ev_id == id => Some(Err(())),
                     _ => None,
                 })
                 .await
@@ -161,11 +214,22 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::SavingData => {
-                network_sender.send(SystemCmd::SaveLocally).await;
+                let id = new_id();
+                info!(
+                    "FSM: state=SavingData send SaveLocally id={} save_failures={}",
+                    id.0, save_failure_count
+                );
+                network_sender.send(SystemCmd::SaveLocally { id }).await;
 
                 match wait_for(&mut event_subscriber, GENERAL_TIMEOUT, |e| match e {
-                    SystemEvents::Data(DataEvents::DataSaved) => Some(true),
-                    SystemEvents::Data(DataEvents::DataError) => Some(false),
+                    SystemEvents::Data {
+                        id: ev_id,
+                        event: DataEvents::DataSaved,
+                    } if ev_id == id => Some(true),
+                    SystemEvents::Data {
+                        id: ev_id,
+                        event: DataEvents::DataError,
+                    } if ev_id == id => Some(false),
                     _ => None,
                 })
                 .await

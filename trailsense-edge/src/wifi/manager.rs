@@ -7,13 +7,6 @@ use log::{error, info};
 
 use crate::orchestration::types::{SnifferEvents, SystemCmd, SystemEvents};
 
-#[derive(PartialEq)]
-pub enum WifiCmd {
-    StartSniffing,
-    StopSniffing,
-    EnableSta,
-}
-
 const RADIO_SETTLE_DELAY: Duration = Duration::from_secs(5);
 
 #[embassy_executor::task]
@@ -32,37 +25,54 @@ pub async fn wifi_manager_task(
 ) {
     loop {
         let command = sniffer_command_receiver.receive().await;
-        if command == SystemCmd::StartSniffing {
-            match sniffer.set_promiscuous_mode(true) {
+
+        match command {
+            SystemCmd::StartSniffing { id } => match sniffer.set_promiscuous_mode(true) {
                 Ok(()) => {
                     info!("Enabled Promiscuous Mode");
                     sniffer.set_receive_cb(callback);
                     orchestrator_event_publisher
-                        .publish(SystemEvents::Sniffer(SnifferEvents::StartedSniffing))
+                        .publish(SystemEvents::Sniffer {
+                            id,
+                            event: SnifferEvents::StartedSniffing,
+                        })
                         .await;
                 }
                 Err(e) => {
                     error!("Failed to enable promiscuous mode: {:?}", e);
                     orchestrator_event_publisher
-                        .publish(SystemEvents::Sniffer(SnifferEvents::SniffingError))
+                        .publish(SystemEvents::Sniffer {
+                            id,
+                            event: SnifferEvents::SniffingError,
+                        })
                         .await;
                 }
-            }
-        } else if command == SystemCmd::StopSniffing {
-            match sniffer.set_promiscuous_mode(false) {
+            },
+
+            SystemCmd::StopSniffing { id } => match sniffer.set_promiscuous_mode(false) {
                 Ok(()) => {
                     info!("Disabled Promiscuous mode");
                     Timer::after(RADIO_SETTLE_DELAY).await;
                     orchestrator_event_publisher
-                        .publish(SystemEvents::Sniffer(SnifferEvents::StoppedSniffing))
+                        .publish(SystemEvents::Sniffer {
+                            id,
+                            event: SnifferEvents::StoppedSniffing,
+                        })
                         .await;
                 }
                 Err(e) => {
                     error!("Failed to disable promiscuous mode: {:?}", e);
                     orchestrator_event_publisher
-                        .publish(SystemEvents::Sniffer(SnifferEvents::SniffingError))
+                        .publish(SystemEvents::Sniffer {
+                            id,
+                            event: SnifferEvents::SniffingError,
+                        })
                         .await;
                 }
+            },
+
+            _ => {
+                // ignore commands not handled by wifi manager
             }
         }
     }

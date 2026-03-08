@@ -108,6 +108,7 @@ impl UplinkTransport for WifiTransport {
         }
 
         if self.consecutive_dns_failures >= self.dns_restart_threshold {
+            info!("NET: triggering Wi-Fi controller restart due to DNS failures");
             self.recovery_pending = true;
             self.wifi_control_sender
                 .send(WifiControlCmd::RestartController)
@@ -116,6 +117,8 @@ impl UplinkTransport for WifiTransport {
             return SendDataOutcome::BackoffRequired;
         }
         if self.consecutive_dns_failures >= self.dns_reconnect_threshold {
+            info!("NET: triggering Wi-Fi reconnect due to DNS failures");
+
             self.recovery_pending = true;
             self.wifi_control_sender
                 .send(WifiControlCmd::Reconnect)
@@ -179,6 +182,12 @@ impl UplinkTransport for WifiTransport {
                             e
                         );
                         if matches!(e, reqwless::Error::Dns) {
+                            error!(
+                                "NET: DNS failure count={}/{} restart_threshold={}",
+                                self.consecutive_dns_failures + 1,
+                                self.dns_reconnect_threshold,
+                                self.dns_restart_threshold
+                            );
                             self.consecutive_dns_failures += 1;
                             return SendDataOutcome::RetryableFailure;
                         }
@@ -206,6 +215,12 @@ impl UplinkTransport for WifiTransport {
                     e
                 );
                 if matches!(e, reqwless::Error::Dns) {
+                    error!(
+                        "NET: DNS failure count={}/{} restart_threshold={}",
+                        self.consecutive_dns_failures + 1,
+                        self.dns_reconnect_threshold,
+                        self.dns_restart_threshold
+                    );
                     self.consecutive_dns_failures += 1;
                     return SendDataOutcome::RetryableFailure;
                 }

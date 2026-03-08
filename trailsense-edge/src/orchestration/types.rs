@@ -1,3 +1,6 @@
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorrelationId(pub u32);
+
 #[derive(PartialEq, Eq)]
 pub enum SystemState {
     Idle,
@@ -11,21 +14,30 @@ pub enum SystemState {
 
 #[derive(PartialEq, Eq)]
 pub enum SystemCmd {
-    StartSniffing,
-    StopSniffing,
-    Connect,
-    UploadData,
-    SaveLocally,
+    StartSniffing { id: CorrelationId },
+    StopSniffing { id: CorrelationId },
+    Connect { id: CorrelationId },
+    UploadData { id: CorrelationId },
+    SaveLocally { id: CorrelationId },
     Sleep,
     Wake,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum SystemEvents {
+    Sniffer {
+        id: CorrelationId,
+        event: SnifferEvents,
+    },
+    Upload {
+        id: CorrelationId,
+        event: UploadEvents,
+    },
+    Data {
+        id: CorrelationId,
+        event: DataEvents,
+    },
     InitComplete,
-    Sniffer(SnifferEvents),
-    Upload(UploadEvents),
-    Data(DataEvents),
     Sleep(SleepEvents),
 }
 
@@ -41,7 +53,7 @@ pub enum UploadEvents {
     NetworkConnected,
     NetworkError,
     UploadError,
-    UploadSuccessfull,
+    UploadSuccessful,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

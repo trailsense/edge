@@ -93,7 +93,12 @@ pub async fn connect(
         match controller.connect_async().await {
             Ok(_) => info!("Wifi connected!"),
             Err(e) => {
-                error!("Failed to connect to wifi: {:?}", e);
+                error!(
+                    "WIFI: connect_async failed: {:?}, sta_state={:?}, started={:?}",
+                    e,
+                    esp_radio::wifi::sta_state(),
+                    controller.is_started()
+                );
                 Timer::after(WIFI_RETRY_DELAY).await;
             }
         }
