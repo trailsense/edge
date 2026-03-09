@@ -8,10 +8,11 @@ use embassy_time::{Duration, Timer};
 use log::{debug, error, info};
 
 use crate::orchestration::types::{
-    CorrelationId, DataEvents, SnifferEvents, SystemCmd, SystemEvents, SystemState, UploadEvents,
+    CorrelationId, DataEvents, SnifferEvents, SystemCmd, SystemEvents, SystemState,
+    TransportEvents, UploadEvents,
 };
 
-const PERIOD: Duration = Duration::from_secs(180); // Change for testing reasons.
+const PERIOD: Duration = Duration::from_secs(20); // Change for testing reasons.
 const NETWORK_LIMIT: u8 = 5;
 const MAX_LOCAL_SAVES: u8 = 10;
 const MAX_SAVE_FAILURES: u8 = 5;
@@ -66,6 +67,7 @@ pub async fn orchestrate_node(
     let mut network_error_count = 0;
     let mut save_failure_count = 0;
     let mut network_fallback_count = 0;
+    let mut uplink_transport_enabled = false;
 
     let mut next_id: u32 = 1;
     let mut new_id = || {
@@ -81,19 +83,51 @@ pub async fn orchestrate_node(
                 current_state = SystemState::Sniffing;
             }
             SystemState::Sniffing => {
-                let id = new_id();
-                info!("FSM: state=Sniffing send StartSniffing id={}", id.0);
-                sniffer_sender.send(SystemCmd::StartSniffing { id }).await;
+                let transport_id: CorrelationId = new_id();
+                info!(
+                    "FSM: state=Sniffing send StartSniffing id={}",
+                    transport_id.0
+                );
 
+                network_sender
+                    .send(SystemCmd::SetTransportEnabled {
+                        id: transport_id,
+                        enabled: false,
+                    })
+                    .await;
+
+                match wait_for(&mut event_subscriber, GENERAL_TIMEOUT, |e| match e {
+                    SystemEvents::Transport {
+                        id: ev_id,
+                        event: TransportEvents::TransportDisabled,
+                    } if ev_id == transport_id => Some(()),
+                    _ => None,
+                })
+                .await
+                {
+                    WaitResult::Matched(()) => {}
+                    WaitResult::Timeout => {
+                        error!("FSM: timeout waiting for transport disable ack");
+                        current_state = SystemState::Sniffing;
+                        continue;
+                    }
+                }
+
+                uplink_transport_enabled = false;
+
+                let sniffing_id = new_id();
+                sniffer_sender
+                    .send(SystemCmd::StartSniffing { id: sniffing_id })
+                    .await;
                 match wait_for(&mut event_subscriber, GENERAL_TIMEOUT, |e| match e {
                     SystemEvents::Sniffer {
                         id: ev_id,
                         event: SnifferEvents::StartedSniffing,
-                    } if ev_id == id => Some(true),
+                    } if ev_id == sniffing_id => Some(true),
                     SystemEvents::Sniffer {
                         id: ev_id,
                         event: SnifferEvents::SniffingError,
-                    } if ev_id == id => Some(false),
+                    } if ev_id == sniffing_id => Some(false),
                     _ => None,
                 })
                 .await
@@ -103,7 +137,7 @@ pub async fn orchestrate_node(
                             SystemEvents::Sniffer {
                                 id: ev_id,
                                 event: SnifferEvents::SniffingError,
-                            } if ev_id == id => Some(()),
+                            } if ev_id == sniffing_id => Some(()),
                             _ => None,
                         })
                         .await
@@ -118,19 +152,25 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::PreparingUpload => {
-                let id = new_id();
-                info!("FSM: state=PreparingUpload send StopSniffing id={}", id.0);
-                sniffer_sender.send(SystemCmd::StopSniffing { id }).await;
+                let sniffing_id = new_id();
+                info!(
+                    "FSM: state=PreparingUpload send StopSniffing id={}",
+                    sniffing_id.0
+                );
+
+                sniffer_sender
+                    .send(SystemCmd::StopSniffing { id: sniffing_id })
+                    .await;
 
                 match wait_for(&mut event_subscriber, STOP_SNIFF_TIMEOUT, |e| match e {
                     SystemEvents::Sniffer {
                         id: ev_id,
                         event: SnifferEvents::StoppedSniffing,
-                    } if ev_id == id => Some(true),
+                    } if ev_id == sniffing_id => Some(true),
                     SystemEvents::Sniffer {
                         id: ev_id,
                         event: SnifferEvents::SniffingError,
-                    } if ev_id == id => Some(false),
+                    } if ev_id == sniffing_id => Some(false),
                     _ => None,
                 })
                 .await
@@ -138,6 +178,34 @@ pub async fn orchestrate_node(
                     WaitResult::Matched(true) => current_state = SystemState::Connecting,
                     WaitResult::Matched(false) => current_state = SystemState::Sniffing,
                     WaitResult::Timeout => current_state = SystemState::Sniffing,
+                }
+
+                let transport_id = new_id();
+
+                network_sender
+                    .send(SystemCmd::SetTransportEnabled {
+                        id: transport_id,
+                        enabled: true,
+                    })
+                    .await;
+
+                match wait_for(&mut event_subscriber, GENERAL_TIMEOUT, |e| match e {
+                    SystemEvents::Transport {
+                        id: ev_id,
+                        event: TransportEvents::TransportEnabled,
+                    } if ev_id == transport_id => Some(()),
+                    _ => None,
+                })
+                .await
+                {
+                    WaitResult::Matched(()) => {
+                        uplink_transport_enabled = true;
+                    }
+                    WaitResult::Timeout => {
+                        error!("FSM: timeout waiting for transport enable ack");
+                        current_state = SystemState::Sniffing;
+                        continue;
+                    }
                 }
             }
             SystemState::Connecting => {
@@ -214,6 +282,34 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::SavingData => {
+                if uplink_transport_enabled {
+                    let transport_id = new_id();
+
+                    network_sender
+                        .send(SystemCmd::SetTransportEnabled {
+                            id: transport_id,
+                            enabled: false,
+                        })
+                        .await;
+
+                    match wait_for(&mut event_subscriber, GENERAL_TIMEOUT, |e| match e {
+                        SystemEvents::Transport {
+                            id: ev_id,
+                            event: TransportEvents::TransportDisabled,
+                        } if ev_id == transport_id => Some(()),
+                        _ => None,
+                    })
+                    .await
+                    {
+                        WaitResult::Matched(()) => {
+                            uplink_transport_enabled = false;
+                        }
+                        WaitResult::Timeout => {
+                            error!("FSM: timeout waiting for transport disable in SavingData");
+                        }
+                    }
+                }
+
                 let id = new_id();
                 info!(
                     "FSM: state=SavingData send SaveLocally id={} save_failures={}",

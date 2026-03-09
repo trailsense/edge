@@ -10,11 +10,13 @@ const WIFI_RETRY_DELAY: Duration = Duration::from_secs(5);
 const WIFI_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const RECONNECT_SETTLE_DELAY: Duration = Duration::from_secs(2);
 const RESTART_SETTLE_DELAY: Duration = Duration::from_secs(2);
+const CONNECT_FAILURE_RESTART_THRESHOLD: u8 = 6;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum WifiControlCmd {
     Reconnect,
     RestartController,
+    EnableAutoConnect(bool),
 }
 
 #[embassy_executor::task]
@@ -27,6 +29,9 @@ pub async fn connect(
     mut controller: WifiController<'static>,
     control_receiver: Receiver<'static, CriticalSectionRawMutex, WifiControlCmd, 4>,
 ) {
+    let mut auto_connect_enabled = true;
+    let mut consecutive_connect_failures: u8 = 0;
+
     let ssid = match SSID {
         Some(v) => v,
         None => {
@@ -46,23 +51,47 @@ pub async fn connect(
     info!("Connecting to wifi");
 
     loop {
-        if let Ok(cmd) = control_receiver.try_receive() {
-            if cmd == WifiControlCmd::Reconnect {
-                info!("Wi-Fi reconnect requested");
-                if let Err(e) = controller.disconnect_async().await {
-                    error!("Failed to disconnect Wi-Fi during reconnect: {:?}", e);
+        // Drain queued control commands first so state changes are applied promptly.
+        while let Ok(cmd) = control_receiver.try_receive() {
+            match cmd {
+                WifiControlCmd::EnableAutoConnect(enabled) => {
+                    auto_connect_enabled = enabled;
+                    info!("WIFI: auto-connect set to {}", enabled);
+                    consecutive_connect_failures = 0;
+
+                    if !enabled {
+                        // Optional: force disconnect when pausing.
+                        if let Err(e) = controller.disconnect_async().await {
+                            error!("WIFI: disconnect on pause failed: {:?}", e);
+                        }
+                    }
                 }
-                Timer::after(RECONNECT_SETTLE_DELAY).await;
-            } else if cmd == WifiControlCmd::RestartController {
-                info!("Wi-Fi controller restart requested");
-                if let Err(e) = controller.disconnect_async().await {
-                    error!("Failed to disconnect Wi-Fi before restart: {:?}", e);
+                WifiControlCmd::Reconnect => {
+                    info!("Wi-Fi reconnect requested");
+                    consecutive_connect_failures = 0;
+                    if let Err(e) = controller.disconnect_async().await {
+                        error!("Failed to disconnect Wi-Fi during reconnect: {:?}", e);
+                    }
+                    Timer::after(RECONNECT_SETTLE_DELAY).await;
                 }
-                if let Err(e) = controller.stop_async().await {
-                    error!("Failed to stop Wi-Fi controller: {:?}", e);
+                WifiControlCmd::RestartController => {
+                    info!("Wi-Fi controller restart requested");
+                    consecutive_connect_failures = 0;
+                    if let Err(e) = controller.disconnect_async().await {
+                        error!("Failed to disconnect Wi-Fi before restart: {:?}", e);
+                    }
+                    if let Err(e) = controller.stop_async().await {
+                        error!("Failed to stop Wi-Fi controller: {:?}", e);
+                    }
+                    Timer::after(RESTART_SETTLE_DELAY).await;
                 }
-                Timer::after(RESTART_SETTLE_DELAY).await;
             }
+        }
+
+        if !auto_connect_enabled {
+            consecutive_connect_failures = 0;
+            Timer::after(WIFI_POLL_INTERVAL).await;
+            continue;
         }
 
         if matches!(esp_radio::wifi::sta_state(), WifiStaState::Connected) {
@@ -91,14 +120,39 @@ pub async fn connect(
         }
 
         match controller.connect_async().await {
-            Ok(_) => info!("Wifi connected!"),
+            Ok(_) => {
+                consecutive_connect_failures = 0;
+                info!("Wifi connected!");
+                Timer::after(WIFI_POLL_INTERVAL).await;
+            }
             Err(e) => {
+                consecutive_connect_failures = consecutive_connect_failures.saturating_add(1);
                 error!(
-                    "WIFI: connect_async failed: {:?}, sta_state={:?}, started={:?}",
+                    "WIFI: connect_async failed: {:?}, sta_state={:?}, started={:?}, failures={}",
                     e,
                     esp_radio::wifi::sta_state(),
-                    controller.is_started()
+                    controller.is_started(),
+                    consecutive_connect_failures
                 );
+
+                if consecutive_connect_failures >= CONNECT_FAILURE_RESTART_THRESHOLD {
+                    error!(
+                        "WIFI: too many connect failures ({}), restarting controller",
+                        consecutive_connect_failures
+                    );
+
+                    if let Err(err) = controller.disconnect_async().await {
+                        error!("WIFI: disconnect before auto-restart failed: {:?}", err);
+                    }
+                    if let Err(err) = controller.stop_async().await {
+                        error!("WIFI: stop during auto-restart failed: {:?}", err);
+                    }
+
+                    consecutive_connect_failures = 0;
+                    Timer::after(RESTART_SETTLE_DELAY).await;
+                    continue;
+                }
+
                 Timer::after(WIFI_RETRY_DELAY).await;
             }
         }

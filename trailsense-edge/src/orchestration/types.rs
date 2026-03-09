@@ -19,6 +19,7 @@ pub enum SystemCmd {
     Connect { id: CorrelationId },
     UploadData { id: CorrelationId },
     SaveLocally { id: CorrelationId },
+    SetTransportEnabled { id: CorrelationId, enabled: bool },
     Sleep,
     Wake,
 }
@@ -37,6 +38,10 @@ pub enum SystemEvents {
         id: CorrelationId,
         event: DataEvents,
     },
+    Transport {
+        id: CorrelationId,
+        event: TransportEvents,
+    },
     InitComplete,
     Sleep(SleepEvents),
 }
@@ -46,6 +51,12 @@ pub enum SnifferEvents {
     StartedSniffing,
     SniffingError,
     StoppedSniffing,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum TransportEvents {
+    TransportEnabled,
+    TransportDisabled,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

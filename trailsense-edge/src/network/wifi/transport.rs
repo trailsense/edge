@@ -17,7 +17,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender
 
 use crate::{
     network::{
-        UplinkTransport,
+        TransportControl, UplinkTransport,
         types::{ConnectionOutcome, PackageDto, SendDataOutcome},
     },
     packages::package_store::PackageEntity,
@@ -59,6 +59,7 @@ pub struct WifiTransport {
     dns_restart_threshold: u8,
     wifi_control_sender: Sender<'static, CriticalSectionRawMutex, WifiControlCmd, 4>,
     recovery_pending: bool,
+    auto_connect_enabled: bool,
 }
 
 impl WifiTransport {
@@ -75,14 +76,32 @@ impl WifiTransport {
             dns_reconnect_threshold: config.dns_reconnect_threshold,
             dns_restart_threshold: config.dns_restart_threshold,
             wifi_control_sender: wifi_control_sender,
+            auto_connect_enabled: true,
         }
     }
 }
 
 impl UplinkTransport for WifiTransport {
-    async fn ensure_connected(&mut self) -> ConnectionOutcome {
-        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+    async fn control(&mut self, cmd: TransportControl) {
+        let enabled = matches!(cmd, TransportControl::Enable);
 
+        self.auto_connect_enabled = enabled;
+
+        if !enabled {
+            self.recovery_pending = false;
+        }
+
+        self.wifi_control_sender
+            .send(WifiControlCmd::EnableAutoConnect(enabled))
+            .await;
+    }
+
+    async fn ensure_connected(&mut self) -> ConnectionOutcome {
+        if !self.auto_connect_enabled {
+            return ConnectionOutcome::Disconnected;
+        }
+
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
         let was_recovering = self.recovery_pending;
 
         if wait_for_connection(self.stack)
@@ -103,6 +122,10 @@ impl UplinkTransport for WifiTransport {
         ConnectionOutcome::Connected
     }
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
+        if !self.auto_connect_enabled {
+            return SendDataOutcome::BackoffRequired;
+        }
+
         if self.recovery_pending {
             return SendDataOutcome::BackoffRequired;
         }

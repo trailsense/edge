@@ -1,8 +1,8 @@
 extern crate alloc;
 
 use crate::{
-    network::{UplinkTransport, types::ConnectionOutcome},
-    orchestration::types::{SystemCmd, SystemEvents, UploadEvents},
+    network::{TransportControl, UplinkTransport, types::ConnectionOutcome},
+    orchestration::types::{SystemCmd, SystemEvents, TransportEvents, UploadEvents},
 };
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
@@ -37,6 +37,25 @@ pub async fn uploader_task(
         let command = network_command_receiver.receive().await;
 
         match command {
+            SystemCmd::SetTransportEnabled { id, enabled } => {
+                if enabled {
+                    transport.control(TransportControl::Enable).await;
+                    orchestrator_event_publisher
+                        .publish(SystemEvents::Transport {
+                            id,
+                            event: TransportEvents::TransportEnabled,
+                        })
+                        .await;
+                } else {
+                    transport.control(TransportControl::Disable).await;
+                    orchestrator_event_publisher
+                        .publish(SystemEvents::Transport {
+                            id,
+                            event: TransportEvents::TransportDisabled,
+                        })
+                        .await;
+                }
+            }
             SystemCmd::Connect { id } => {
                 info!("UPL: recv Connect id={}", id.0);
                 match transport.ensure_connected().await {

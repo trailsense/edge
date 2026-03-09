@@ -29,4 +29,10 @@ impl UplinkTransport for ActiveTransport {
             ActiveTransport::Wifi(t) => t.send_data(packages).await,
         }
     }
+
+    async fn control(&mut self, cmd: super::TransportControl) {
+        match self {
+            ActiveTransport::Wifi(t) => t.control(cmd).await,
+        }
+    }
 }
