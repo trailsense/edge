@@ -4,7 +4,7 @@ use embassy_futures::select::{Either, select};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender, pubsub::Subscriber,
 };
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use log::{debug, error, info};
 
 use crate::orchestration::types::{
@@ -27,6 +27,9 @@ enum WaitResult<T> {
 }
 
 // Waits until a matching event arrives; ignores unrelated events.
+
+/// # Wait For SystemEvent
+/// This function helps to add a timeout when sending a system command and waiting for an event as a response
 async fn wait_for<T, F>(
     sub: &mut Subscriber<'static, CriticalSectionRawMutex, SystemEvents, 4, 1, 2>,
     timeout: Duration,
@@ -35,14 +38,22 @@ async fn wait_for<T, F>(
 where
     F: FnMut(SystemEvents) -> Option<T>,
 {
+    let deadline = Instant::now() + timeout;
+
     loop {
-        match select(Timer::after(timeout), sub.next_message_pure()).await {
+        let now = Instant::now();
+        if now >= deadline {
+            return WaitResult::Timeout;
+        }
+
+        let remaining = deadline - now;
+
+        match select(Timer::after(remaining), sub.next_message_pure()).await {
             Either::First(_) => return WaitResult::Timeout,
             Either::Second(ev) => {
                 if let Some(v) = map(ev) {
                     return WaitResult::Matched(v);
                 } else {
-                    // unrelated event from mixed stream; ignore
                     debug!("FSM: ignored unrelated event while waiting");
                 }
             }
@@ -84,10 +95,6 @@ pub async fn orchestrate_node(
             }
             SystemState::Sniffing => {
                 let transport_id: CorrelationId = new_id();
-                info!(
-                    "FSM: state=Sniffing send StartSniffing id={}",
-                    transport_id.0
-                );
 
                 network_sender
                     .send(SystemCmd::SetTransportEnabled {
@@ -116,6 +123,10 @@ pub async fn orchestrate_node(
                 uplink_transport_enabled = false;
 
                 let sniffing_id = new_id();
+                info!(
+                    "FSM: state=Sniffing send StartSniffing id={}",
+                    sniffing_id.0
+                );
                 sniffer_sender
                     .send(SystemCmd::StartSniffing { id: sniffing_id })
                     .await;
@@ -175,9 +186,11 @@ pub async fn orchestrate_node(
                 })
                 .await
                 {
-                    WaitResult::Matched(true) => current_state = SystemState::Connecting,
-                    WaitResult::Matched(false) => current_state = SystemState::Sniffing,
-                    WaitResult::Timeout => current_state = SystemState::Sniffing,
+                    WaitResult::Matched(true) => {}
+                    WaitResult::Matched(false) | WaitResult::Timeout => {
+                        current_state = SystemState::Sniffing;
+                        continue;
+                    }
                 }
 
                 let transport_id = new_id();
@@ -200,6 +213,7 @@ pub async fn orchestrate_node(
                 {
                     WaitResult::Matched(()) => {
                         uplink_transport_enabled = true;
+                        current_state = SystemState::Connecting;
                     }
                     WaitResult::Timeout => {
                         error!("FSM: timeout waiting for transport enable ack");
@@ -282,6 +296,7 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::SavingData => {
+                // Currently saves into RAM and not persistent storage. Need to think if that is necesary.
                 if uplink_transport_enabled {
                     let transport_id = new_id();
 

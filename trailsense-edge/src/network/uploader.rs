@@ -2,7 +2,7 @@ extern crate alloc;
 
 use crate::{
     network::{TransportControl, UplinkTransport, types::ConnectionOutcome},
-    orchestration::types::{SystemCmd, SystemEvents, TransportEvents, UploadEvents},
+    orchestration::types::{DataEvents, SystemCmd, SystemEvents, TransportEvents, UploadEvents},
 };
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
@@ -127,6 +127,31 @@ pub async fn uploader_task(
 
                 orchestrator_event_publisher
                     .publish(SystemEvents::Upload { id, event })
+                    .await;
+            }
+
+            SystemCmd::SaveLocally { id } => {
+                info!("UPL: recv SaveLocally id={}", id.0);
+                let fingerprint_snapshot = fingerprint_store::snapshot();
+                let saved_ok = if fingerprint_snapshot.is_empty() {
+                    true
+                } else {
+                    let curr_count = counter::deduplicate_probes(&fingerprint_snapshot);
+                    let ok = package_store::push(curr_count);
+                    if ok {
+                        fingerprint_store::drain();
+                    }
+                    ok
+                };
+
+                let event = if saved_ok {
+                    DataEvents::DataSaved
+                } else {
+                    DataEvents::DataError
+                };
+
+                orchestrator_event_publisher
+                    .publish(SystemEvents::Data { id, event })
                     .await;
             }
 
