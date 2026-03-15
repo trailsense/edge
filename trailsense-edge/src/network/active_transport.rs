@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 #[cfg(feature = "uplink-wifi")]
-use crate::network::wifi::transport::WifiTransport;
+use crate::{network::wifi::transport::WifiTransport, orchestration::types::CorrelationId};
 use crate::{
     network::{
         UplinkTransport,
@@ -27,6 +27,12 @@ impl UplinkTransport for ActiveTransport {
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
         match self {
             ActiveTransport::Wifi(t) => t.send_data(packages).await,
+        }
+    }
+
+    async fn control(&mut self, cmd: super::TransportControl, id: CorrelationId) {
+        match self {
+            ActiveTransport::Wifi(t) => t.control(cmd, id).await,
         }
     }
 }

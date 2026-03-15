@@ -8,7 +8,9 @@
 #![deny(clippy::large_stack_frames)]
 
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, pubsub::PubSubChannel,
+};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::Peripherals;
@@ -20,8 +22,12 @@ use log::{error, info};
 use static_cell::StaticCell;
 use trailsense_edge::{
     network::{self, factory::build_active_transport},
+    orchestration::{
+        orchestrator::orchestrate_node,
+        types::{SystemCmd, SystemEvents},
+    },
     probes::probe_parser::read_packet,
-    wifi::{self, manager::WifiCmd, tasks::WifiControlCmd},
+    wifi::{self, tasks::WifiControlCmd},
 };
 
 extern crate alloc;
@@ -31,8 +37,13 @@ extern crate alloc;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
-static WIFI_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, WifiCmd, 4> = Channel::new();
 static WIFI_CONTROL_CHANNEL: Channel<CriticalSectionRawMutex, WifiControlCmd, 4> = Channel::new();
+
+static SNIFFING_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> = Channel::new();
+static NETWORK_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> = Channel::new();
+static ORCHESTRATOR_EVENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, SystemEvents, 4, 1, 3> =
+    PubSubChannel::new();
+
 const INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 const FATAL_SLEEP: Duration = Duration::from_secs(1);
 
@@ -86,9 +97,22 @@ async fn main(spawner: Spawner) -> ! {
     let mut rng = Rng::new();
     let (ctx, runner) = wifi::init_stack(&mut rng, interfaces.sta);
 
+    let orchestrator_transport_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
+        Ok(p) => p,
+        Err(e) => {
+            error!(
+                "Failed to get publisher for ORCHESTRATOR_EVENT_CHANNEL (fatal): {:?}",
+                e
+            );
+
+            fatal_idle().await;
+        }
+    };
+
     if let Err(e) = spawner.spawn(wifi::tasks::connect(
         wifi_controller,
         WIFI_CONTROL_CHANNEL.receiver(),
+        orchestrator_transport_publisher,
     )) {
         error!("Failed to spawn connection task: {}", e);
     }
@@ -102,17 +126,56 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "uplink-wifi")]
     let transport = build_active_transport(ctx, WIFI_CONTROL_CHANNEL.sender());
 
+    let orchestrator_network_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
+        Ok(p) => p,
+        Err(e) => {
+            error!(
+                "Failed to acquire publisher for ORCHESTRATOR_EVENT_CHANNEL (fatal): {:?}",
+                e
+            );
+
+            fatal_idle().await;
+        }
+    };
+
     if let Err(e) = spawner.spawn(network::uploader::uploader_task(
         transport,
-        WIFI_COMMAND_CHANNEL.sender(),
+        NETWORK_COMMAND_CHANNEL.receiver(),
+        orchestrator_network_publisher,
     )) {
         error!("Failed to spawn uploader task: {}", e);
+    }
+
+    let orchestrator_sniffer_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to initialize Wi-Fi controller (fatal): {:?}", e);
+            fatal_idle().await;
+        }
+    };
+
+    let orchestrator_event_subscriber = match ORCHESTRATOR_EVENT_CHANNEL.subscriber() {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to initialize Wi-Fi controller (fatal): {:?}", e);
+            fatal_idle().await;
+        }
+    };
+
+    if let Err(e) = spawner.spawn(orchestrate_node(
+        orchestrator_event_subscriber,
+        NETWORK_COMMAND_CHANNEL.sender(),
+        SNIFFING_COMMAND_CHANNEL.sender(),
+        trailsense_edge::orchestration::types::SystemState::Idle,
+    )) {
+        error!("Failed to spawn wifi manager task: {}", e);
     }
 
     if let Err(e) = spawner.spawn(wifi::manager::wifi_manager_task(
         interfaces.sniffer,
         read_packet,
-        WIFI_COMMAND_CHANNEL.receiver(),
+        SNIFFING_COMMAND_CHANNEL.receiver(),
+        orchestrator_sniffer_publisher,
     )) {
         error!("Failed to spawn wifi manager task: {}", e);
     }
