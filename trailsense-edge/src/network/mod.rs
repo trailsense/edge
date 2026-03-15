@@ -1,6 +1,7 @@
 extern crate alloc;
 use crate::{
     network::types::{ConnectionOutcome, SendDataOutcome},
+    orchestration::types::CorrelationId,
     packages::package_store::PackageEntity,
 };
 use alloc::vec::Vec;
@@ -19,5 +20,5 @@ pub enum TransportControl {
 pub trait UplinkTransport {
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome;
     async fn ensure_connected(&mut self) -> ConnectionOutcome;
-    async fn control(&mut self, cmd: TransportControl);
+    async fn control(&mut self, cmd: TransportControl, id: CorrelationId);
 }

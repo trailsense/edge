@@ -41,7 +41,7 @@ static WIFI_CONTROL_CHANNEL: Channel<CriticalSectionRawMutex, WifiControlCmd, 4>
 
 static SNIFFING_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> = Channel::new();
 static NETWORK_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> = Channel::new();
-static ORCHESTRATOR_EVENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, SystemEvents, 4, 1, 2> =
+static ORCHESTRATOR_EVENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, SystemEvents, 4, 1, 3> =
     PubSubChannel::new();
 
 const INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -97,9 +97,22 @@ async fn main(spawner: Spawner) -> ! {
     let mut rng = Rng::new();
     let (ctx, runner) = wifi::init_stack(&mut rng, interfaces.sta);
 
+    let orchestrator_transport_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
+        Ok(p) => p,
+        Err(e) => {
+            error!(
+                "Failed to get publisher for ORCHESTRATOR_EVENT_CHANNEL (fatal): {:?}",
+                e
+            );
+
+            fatal_idle().await;
+        }
+    };
+
     if let Err(e) = spawner.spawn(wifi::tasks::connect(
         wifi_controller,
         WIFI_CONTROL_CHANNEL.receiver(),
+        orchestrator_transport_publisher,
     )) {
         error!("Failed to spawn connection task: {}", e);
     }
@@ -116,7 +129,11 @@ async fn main(spawner: Spawner) -> ! {
     let orchestrator_network_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
         Ok(p) => p,
         Err(e) => {
-            error!("Failed to initialize Wi-Fi controller (fatal): {:?}", e);
+            error!(
+                "Failed to acquire publisher for ORCHESTRATOR_EVENT_CHANNEL (fatal): {:?}",
+                e
+            );
+
             fatal_idle().await;
         }
     };

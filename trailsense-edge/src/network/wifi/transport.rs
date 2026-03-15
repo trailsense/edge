@@ -20,6 +20,7 @@ use crate::{
         TransportControl, UplinkTransport,
         types::{ConnectionOutcome, PackageDto, SendDataOutcome},
     },
+    orchestration::types::CorrelationId,
     packages::package_store::PackageEntity,
     wifi::{WifiCtx, tasks::WifiControlCmd, wait_for_connection},
 };
@@ -82,7 +83,7 @@ impl WifiTransport {
 }
 
 impl UplinkTransport for WifiTransport {
-    async fn control(&mut self, cmd: TransportControl) {
+    async fn control(&mut self, cmd: TransportControl, id: CorrelationId) {
         let enabled = matches!(cmd, TransportControl::Enable);
 
         self.auto_connect_enabled = enabled;
@@ -92,7 +93,7 @@ impl UplinkTransport for WifiTransport {
         }
 
         self.wifi_control_sender
-            .send(WifiControlCmd::EnableAutoConnect(enabled))
+            .send(WifiControlCmd::SetAutoConnect { enabled, id })
             .await;
     }
 
@@ -211,7 +212,8 @@ impl UplinkTransport for WifiTransport {
                                 self.dns_reconnect_threshold,
                                 self.dns_restart_threshold
                             );
-                            self.consecutive_dns_failures += 1;
+                            self.consecutive_dns_failures =
+                                self.consecutive_dns_failures.saturating_add(1);
                             return SendDataOutcome::RetryableFailure;
                         }
                         if attempt + 1 < REQUEST_BUILD_ATTEMPTS {
@@ -244,7 +246,7 @@ impl UplinkTransport for WifiTransport {
                         self.dns_reconnect_threshold,
                         self.dns_restart_threshold
                     );
-                    self.consecutive_dns_failures += 1;
+                    self.consecutive_dns_failures = self.consecutive_dns_failures.saturating_add(1);
                     return SendDataOutcome::RetryableFailure;
                 }
                 self.consecutive_dns_failures = 0;

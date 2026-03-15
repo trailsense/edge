@@ -31,7 +31,7 @@ enum WaitResult<T> {
 /// # Wait For SystemEvent
 /// This function helps to add a timeout when sending a system command and waiting for an event as a response
 async fn wait_for<T, F>(
-    sub: &mut Subscriber<'static, CriticalSectionRawMutex, SystemEvents, 4, 1, 2>,
+    sub: &mut Subscriber<'static, CriticalSectionRawMutex, SystemEvents, 4, 1, 3>,
     timeout: Duration,
     mut map: F,
 ) -> WaitResult<T>
@@ -69,15 +69,15 @@ where
 /// As soon as all the hardware is initialized, the orchestrator can take over and handle the state. Technically the state coming in should always be idle.
 #[embassy_executor::task]
 pub async fn orchestrate_node(
-    mut event_subscriber: Subscriber<'static, CriticalSectionRawMutex, SystemEvents, 4, 1, 2>,
+    mut event_subscriber: Subscriber<'static, CriticalSectionRawMutex, SystemEvents, 4, 1, 3>,
     network_sender: Sender<'static, CriticalSectionRawMutex, SystemCmd, 4>,
     sniffer_sender: Sender<'static, CriticalSectionRawMutex, SystemCmd, 4>,
     state: SystemState,
 ) {
     let mut current_state = state;
-    let mut network_error_count = 0;
-    let mut save_failure_count = 0;
-    let mut network_fallback_count = 0;
+    let mut network_error_count: u8 = 0;
+    let mut save_failure_count: u8 = 0;
+    let mut network_fallback_count: u8 = 0;
     let mut uplink_transport_enabled = false;
 
     let mut next_id: u32 = 1;
@@ -245,7 +245,7 @@ pub async fn orchestrate_node(
                 {
                     WaitResult::Matched(true) => current_state = SystemState::Uploading,
                     WaitResult::Matched(false) | WaitResult::Timeout => {
-                        network_error_count += 1;
+                        network_error_count = network_error_count.saturating_add(1);
                         current_state = if network_error_count >= NETWORK_LIMIT {
                             SystemState::SavingData
                         } else {
@@ -286,7 +286,7 @@ pub async fn orchestrate_node(
                         current_state = SystemState::Idle;
                     }
                     WaitResult::Matched(Err(())) | WaitResult::Timeout => {
-                        network_error_count += 1;
+                        network_error_count = network_error_count.saturating_add(1);
                         current_state = if network_error_count >= NETWORK_LIMIT {
                             SystemState::SavingData
                         } else {
@@ -296,7 +296,7 @@ pub async fn orchestrate_node(
                 }
             }
             SystemState::SavingData => {
-                // Currently saves into RAM and not persistent storage. Need to think if that is necesary.
+                // Currently saves into RAM and not persistent storage. Need to think if that is necessary.
                 if uplink_transport_enabled {
                     let transport_id = new_id();
 
@@ -347,12 +347,12 @@ pub async fn orchestrate_node(
                 {
                     WaitResult::Matched(true) => {
                         current_state = SystemState::Idle;
-                        network_fallback_count += 1;
+                        network_fallback_count = network_fallback_count.saturating_add(1);
                         save_failure_count = 0;
                     }
                     WaitResult::Matched(false) | WaitResult::Timeout => {
                         error!("Issue saving data locally");
-                        save_failure_count += 1;
+                        save_failure_count = save_failure_count.saturating_add(1);
                         current_state = SystemState::SavingData;
                     }
                 }
@@ -367,6 +367,9 @@ pub async fn orchestrate_node(
             }
             SystemState::Sleep => {
                 // TODO: Implement real deep sleep. For now just take a X min break.
+
+                // Reset network error count, so that after sleep it can retry connecting.
+                network_error_count = 0;
                 Timer::after(PERIOD).await;
                 current_state = SystemState::Idle;
             }

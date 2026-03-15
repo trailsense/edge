@@ -20,7 +20,7 @@ pub async fn wifi_manager_task(
         SystemEvents,
         4,
         1,
-        2,
+        3,
     >,
 ) {
     loop {

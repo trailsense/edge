@@ -2,7 +2,7 @@ extern crate alloc;
 
 use crate::{
     network::{TransportControl, UplinkTransport, types::ConnectionOutcome},
-    orchestration::types::{DataEvents, SystemCmd, SystemEvents, TransportEvents, UploadEvents},
+    orchestration::types::{DataEvents, SystemCmd, SystemEvents, UploadEvents},
 };
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
@@ -26,7 +26,7 @@ pub async fn uploader_task(
         SystemEvents,
         4,
         1,
-        2,
+        3,
     >,
 ) {
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,21 +39,9 @@ pub async fn uploader_task(
         match command {
             SystemCmd::SetTransportEnabled { id, enabled } => {
                 if enabled {
-                    transport.control(TransportControl::Enable).await;
-                    orchestrator_event_publisher
-                        .publish(SystemEvents::Transport {
-                            id,
-                            event: TransportEvents::TransportEnabled,
-                        })
-                        .await;
+                    transport.control(TransportControl::Enable, id).await;
                 } else {
-                    transport.control(TransportControl::Disable).await;
-                    orchestrator_event_publisher
-                        .publish(SystemEvents::Transport {
-                            id,
-                            event: TransportEvents::TransportDisabled,
-                        })
-                        .await;
+                    transport.control(TransportControl::Disable, id).await;
                 }
             }
             SystemCmd::Connect { id } => {
