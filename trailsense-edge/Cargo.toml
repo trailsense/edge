@@ -75,6 +75,7 @@ serde_json = { version = "1.0.149", default-features = false, features = ["alloc
 serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
 der = { version = "0.8.0", features = ["heapless"] }
 embassy-futures = "0.1.2"
+atat = { version = "0.24.1", features = ["derive"] }
 
 [profile.dev]
 # Rust debug is too slow.

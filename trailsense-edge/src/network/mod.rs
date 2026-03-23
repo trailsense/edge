@@ -7,6 +7,7 @@ use crate::{
 use alloc::vec::Vec;
 pub mod active_transport;
 pub mod factory;
+pub mod gsm;
 pub mod types;
 pub mod uploader;
 pub mod wifi;
