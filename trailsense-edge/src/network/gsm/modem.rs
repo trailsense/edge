@@ -6,10 +6,12 @@ use atat::{
 };
 use embassy_executor::Spawner;
 use esp_hal::{Async, uart::Uart, uart::UartRx};
-use log::error;
+use log::{error, info};
 use static_cell::StaticCell;
 
-use crate::network::gsm::commands::{GetIpAddr, GsmError, HttpUrcParser, NetOpen, Urc};
+use crate::network::gsm::commands::{
+    GetIpAddr, GsmError, GsmErrorKind, HttpUrcParser, NetOpen, Urc,
+};
 
 pub struct GsmModem {
     client: Client<'static, esp_hal::uart::UartTx<'static, esp_hal::Async>, BUF_SIZE>,
@@ -20,6 +22,8 @@ const URC_CAPACITY: usize = 1;
 const URC_SUBSCRIBERS: usize = 1;
 const MAX_IP_RETRIES: usize = 5;
 const IP_RETRY_DELAY: u64 = 1;
+const MAX_CONNECT_RETRIES: usize = 3;
+const CONNECT_RETRY_DELAY: u64 = 2;
 
 impl GsmModem {
     pub fn new(uart: Uart<'static, Async>, spawner: Spawner) -> Self {
@@ -58,14 +62,10 @@ impl GsmModem {
         for _attempt in 0..MAX_IP_RETRIES {
             match self.client.send(&GetIpAddr).await {
                 Ok(resp) => {
-                    if resp.ip.is_empty() {
-                        error!("The ip address was empty")
-                    } else if resp.ip != "" || resp.ip != "0.0.0.0" {
-                        error!(
-                            "The ip address recieved is in an incorrect format: {}",
-                            resp.ip
-                        )
+                    if resp.ip.is_empty() || resp.ip == "0.0.0.0" {
+                        error!("IP not ready yet: '{}'", resp.ip);
                     } else {
+                        info!("Assigned IP address: '{}'", resp.ip);
                         return Ok(());
                     }
                 }
@@ -81,23 +81,42 @@ impl GsmModem {
 
         Err(GsmError::IpTimeout)
     }
-    pub async fn ensure_connected(&mut self) {
-        let mut is_network_open = false;
-        loop {
-            if !is_network_open {
-                if let Err(_) = self.open_network().await {
-                    continue;
-                } else {
-                    is_network_open = true;
-                }
-            }
+    pub async fn ensure_connected(&mut self) -> Result<(), GsmError> {
+        let mut last_err: Option<GsmError> = None;
 
-            if let Err(_) = self.wait_for_ip().await {
+        for _attempt in 0..MAX_CONNECT_RETRIES {
+            if let Err(e) = self.open_network().await {
+                last_err = Some(e);
+                if matches!(
+                    last_err.as_ref().map(GsmError::kind),
+                    Some(GsmErrorKind::Hard)
+                ) {
+                    break;
+                }
+                embassy_time::Timer::after_secs(CONNECT_RETRY_DELAY).await;
                 continue;
             }
 
-            break;
+            match self.wait_for_ip().await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = Some(e);
+                    if matches!(
+                        last_err.as_ref().map(GsmError::kind),
+                        Some(GsmErrorKind::Hard)
+                    ) {
+                        break;
+                    }
+                    embassy_time::Timer::after_secs(CONNECT_RETRY_DELAY).await;
+                }
+            }
         }
+
+        if let Some(e) = last_err {
+            return Err(e);
+        }
+
+        Err(GsmError::IpTimeout)
     }
     pub async fn post_json(&mut self, _payload: &str) {}
 }

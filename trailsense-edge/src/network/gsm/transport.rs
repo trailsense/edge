@@ -2,9 +2,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use esp_hal::{Async, uart::Uart};
+use log::error;
 
 use crate::network::{
     TransportControl, UplinkTransport,
+    gsm::commands::GsmErrorKind,
     gsm::modem::GsmModem,
     types::{ConnectionOutcome, SendDataOutcome},
 };
@@ -39,8 +41,16 @@ impl UplinkTransport for GsmTransport {
         if !self.auto_connect_enabled {
             return ConnectionOutcome::Disconnected;
         }
-        self.modem.ensure_connected().await;
-        ConnectionOutcome::Connected
+        match self.modem.ensure_connected().await {
+            Ok(()) => ConnectionOutcome::Connected,
+            Err(e) => {
+                error!("GSM ensure_connected failed: {:?}", e);
+                match e.kind() {
+                    GsmErrorKind::Transient => ConnectionOutcome::Disconnected,
+                    GsmErrorKind::Hard => ConnectionOutcome::Failure,
+                }
+            }
+        }
     }
 
     async fn control(&mut self, cmd: TransportControl, _id: CorrelationId) {

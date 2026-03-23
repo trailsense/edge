@@ -1,4 +1,4 @@
-use atat::{Error as AtatError, Parser, atat_derive, digest::ParseError};
+use atat::{CmeError, CmsError, Error as AtatError, Parser, atat_derive, digest::ParseError};
 
 // Responses
 #[derive(atat_derive::AtatResp)]
@@ -59,8 +59,46 @@ pub enum GsmError {
     IpTimeout,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GsmErrorKind {
+    Transient,
+    Hard,
+}
+
+impl GsmError {
+    pub fn kind(&self) -> GsmErrorKind {
+        match self {
+            GsmError::IpTimeout => GsmErrorKind::Transient,
+            GsmError::Atat(err) => atat_error_kind(err),
+        }
+    }
+}
+
 impl From<AtatError> for GsmError {
     fn from(e: AtatError) -> Self {
         GsmError::Atat(e)
+    }
+}
+
+fn atat_error_kind(err: &AtatError) -> GsmErrorKind {
+    match err {
+        AtatError::Timeout
+        | AtatError::Read
+        | AtatError::Write
+        | AtatError::Aborted
+        | AtatError::ConnectionError(_) => GsmErrorKind::Transient,
+        AtatError::CmsError(CmsError::NoNetwork | CmsError::NetworkTimeout) => {
+            GsmErrorKind::Transient
+        }
+        AtatError::CmeError(
+            CmeError::NoNetwork
+            | CmeError::NetworkTimeout
+            | CmeError::TemporarilyOutOfService
+            | CmeError::MscTemporarilyNotReachable
+            | CmeError::Congestion
+            | CmeError::NoCellsInArea
+            | CmeError::NetworkFailureAttach,
+        ) => GsmErrorKind::Transient,
+        _ => GsmErrorKind::Hard,
     }
 }
