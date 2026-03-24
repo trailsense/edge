@@ -92,6 +92,6 @@ opt-level        = 's'
 overflow-checks  = false
 
 [features]
-default = ["uplink-wifi"]
+default = ["uplink-gsm"]
 uplink-wifi = []
 uplink-gsm = []

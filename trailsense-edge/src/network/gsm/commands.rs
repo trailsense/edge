@@ -1,4 +1,7 @@
-use atat::{CmeError, CmsError, Error as AtatError, Parser, atat_derive, digest::ParseError};
+use atat::{
+    AtatCmd, CmeError, CmsError, Error as AtatError, InternalError, Parser, atat_derive,
+    digest::ParseError,
+};
 
 // Responses
 #[derive(atat_derive::AtatResp)]
@@ -31,25 +34,140 @@ pub enum Urc {
     HttpAction(HttpActionResult),
 }
 
+pub struct RawAtCmd<'a, const MAX_LEN: usize, const TIMEOUT_MS: u32> {
+    cmd: &'a str,
+}
+
+pub struct RawPayload<'a, const MAX_LEN: usize, const TIMEOUT_MS: u32> {
+    payload: &'a str,
+}
+
+pub struct RawAtReadCmd<'a, const MAX_LEN: usize, const TIMEOUT_MS: u32> {
+    cmd: &'a str,
+}
+
+impl<'a, const MAX_LEN: usize, const TIMEOUT_MS: u32> RawAtCmd<'a, MAX_LEN, TIMEOUT_MS> {
+    pub fn new(cmd: &'a str) -> Self {
+        Self { cmd }
+    }
+}
+
+impl<'a, const MAX_LEN: usize, const TIMEOUT_MS: u32> RawPayload<'a, MAX_LEN, TIMEOUT_MS> {
+    pub fn new(payload: &'a str) -> Self {
+        Self { payload }
+    }
+}
+
+impl<'a, const MAX_LEN: usize, const TIMEOUT_MS: u32> RawAtReadCmd<'a, MAX_LEN, TIMEOUT_MS> {
+    pub fn new(cmd: &'a str) -> Self {
+        Self { cmd }
+    }
+}
+
+impl<const MAX_LEN: usize, const TIMEOUT_MS: u32> AtatCmd for RawAtCmd<'_, MAX_LEN, TIMEOUT_MS> {
+    type Response = NoResponse;
+    const MAX_LEN: usize = MAX_LEN;
+    const MAX_TIMEOUT_MS: u32 = TIMEOUT_MS;
+
+    fn write(&self, buf: &mut [u8]) -> usize {
+        let cmd = self.cmd.as_bytes();
+        let len = cmd.len();
+        assert!(
+            len + 2 <= buf.len(),
+            "RawAtCmd exceeds TX buffer: needed={}, available={}",
+            len + 2,
+            buf.len()
+        );
+        buf[..len].copy_from_slice(cmd);
+        buf[len] = b'\r';
+        buf[len + 1] = b'\n';
+        len + 2
+    }
+
+    fn parse(&self, resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtatError> {
+        let _ = resp.map_err(AtatError::from)?;
+        Ok(NoResponse)
+    }
+}
+
+impl<const MAX_LEN: usize, const TIMEOUT_MS: u32> AtatCmd for RawPayload<'_, MAX_LEN, TIMEOUT_MS> {
+    type Response = NoResponse;
+    const MAX_LEN: usize = MAX_LEN;
+    const MAX_TIMEOUT_MS: u32 = TIMEOUT_MS;
+    const EXPECTS_RESPONSE_CODE: bool = false;
+
+    fn write(&self, buf: &mut [u8]) -> usize {
+        let payload = self.payload.as_bytes();
+        let len = payload.len();
+        assert!(
+            len <= buf.len(),
+            "RawPayload exceeds TX buffer: needed={}, available={}",
+            len,
+            buf.len()
+        );
+        buf[..len].copy_from_slice(payload);
+        len
+    }
+
+    fn parse(&self, resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtatError> {
+        let _ = resp.map_err(AtatError::from)?;
+        Ok(NoResponse)
+    }
+}
+
+impl<const MAX_LEN: usize, const TIMEOUT_MS: u32> AtatCmd
+    for RawAtReadCmd<'_, MAX_LEN, TIMEOUT_MS>
+{
+    type Response = atat::heapless::String<512>;
+    const MAX_LEN: usize = MAX_LEN;
+    const MAX_TIMEOUT_MS: u32 = TIMEOUT_MS;
+
+    fn write(&self, buf: &mut [u8]) -> usize {
+        let cmd = self.cmd.as_bytes();
+        let len = cmd.len();
+        assert!(
+            len + 2 <= buf.len(),
+            "RawAtReadCmd exceeds TX buffer: needed={}, available={}",
+            len + 2,
+            buf.len()
+        );
+        buf[..len].copy_from_slice(cmd);
+        buf[len] = b'\r';
+        buf[len + 1] = b'\n';
+        len + 2
+    }
+
+    fn parse(&self, resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtatError> {
+        let raw = resp.map_err(AtatError::from)?;
+        let utf8 = core::str::from_utf8(raw).map_err(|_| AtatError::Parse)?;
+        atat::heapless::String::<512>::try_from(utf8).map_err(|_| AtatError::Parse)
+    }
+}
+
 pub struct HttpUrcParser;
 impl Parser for HttpUrcParser {
     fn parse(buf: &[u8]) -> Result<(&[u8], usize), ParseError> {
         const URC: &[u8] = b"+HTTPACTION";
-        let (line, offset) = if let Some(rest) = buf.strip_prefix(b"\r\n") {
-            (rest, 2)
-        } else {
-            (buf, 0)
-        };
-        if !line.starts_with(URC) {
-            if URC.starts_with(line) || b"\r\n+HTTPACTION".starts_with(buf) {
+        if let Some(pos) = buf.windows(URC.len()).position(|w| w == URC) {
+            let line = &buf[pos..];
+            if let Some(end) = line.windows(2).position(|w| w == b"\r\n") {
+                return Ok((&line[..end], pos + end + 2));
+            }
+            return Err(ParseError::Incomplete);
+        }
+
+        let max_tail = core::cmp::min(buf.len(), URC.len().saturating_sub(1));
+        for tail in 1..=max_tail {
+            if buf[buf.len() - tail..] == URC[..tail] {
                 return Err(ParseError::Incomplete);
             }
-            return Err(ParseError::NoMatch);
         }
-        if let Some(end) = line.windows(2).position(|w| w == b"\r\n") {
-            return Ok((&line[..end], offset + end + 2));
+
+        if b"\r\n+HTTPACTION".starts_with(buf) {
+            return Err(ParseError::Incomplete);
         }
-        Err(ParseError::Incomplete)
+
+        Err(ParseError::NoMatch)
     }
 }
 
@@ -57,6 +175,10 @@ impl Parser for HttpUrcParser {
 pub enum GsmError {
     Atat(AtatError),
     IpTimeout,
+    BufferTooSmall { needed: usize, available: usize },
+    CommandBuildFailed,
+    HttpActionTimeout,
+    HttpStatus(u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +191,16 @@ impl GsmError {
     pub fn kind(&self) -> GsmErrorKind {
         match self {
             GsmError::IpTimeout => GsmErrorKind::Transient,
+            GsmError::BufferTooSmall { .. } => GsmErrorKind::Hard,
+            GsmError::CommandBuildFailed => GsmErrorKind::Hard,
+            GsmError::HttpActionTimeout => GsmErrorKind::Transient,
+            GsmError::HttpStatus(status) => {
+                if *status >= 500 || *status == 408 || *status == 429 {
+                    GsmErrorKind::Transient
+                } else {
+                    GsmErrorKind::Hard
+                }
+            }
             GsmError::Atat(err) => atat_error_kind(err),
         }
     }

@@ -18,7 +18,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender
 use crate::{
     network::{
         TransportControl, UplinkTransport,
-        types::{ConnectionOutcome, PackageDto, SendDataOutcome},
+        types::{ConnectionOutcome, ControlOutcome, PackageDto, SendDataOutcome},
     },
     orchestration::types::CorrelationId,
     packages::package_store::PackageEntity,
@@ -83,7 +83,7 @@ impl WifiTransport {
 }
 
 impl UplinkTransport for WifiTransport {
-    async fn control(&mut self, cmd: TransportControl, id: CorrelationId) {
+    async fn control(&mut self, cmd: TransportControl, id: CorrelationId) -> ControlOutcome {
         let enabled = matches!(cmd, TransportControl::Enable);
 
         self.auto_connect_enabled = enabled;
@@ -95,6 +95,8 @@ impl UplinkTransport for WifiTransport {
         self.wifi_control_sender
             .send(WifiControlCmd::SetAutoConnect { enabled, id })
             .await;
+
+        ControlOutcome::PendingExternalAck
     }
 
     async fn ensure_connected(&mut self) -> ConnectionOutcome {

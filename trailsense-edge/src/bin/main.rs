@@ -14,10 +14,15 @@ use embassy_sync::{
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::Peripherals;
+
+#[cfg(feature = "uplink-wifi")]
 use esp_hal::rng::Rng;
 
 use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
+
+#[cfg(feature = "uplink-gsm")]
+use esp_hal::uart::{Config, Uart};
 use log::{error, info};
 use static_cell::StaticCell;
 use trailsense_edge::{
@@ -27,8 +32,11 @@ use trailsense_edge::{
         types::{SystemCmd, SystemEvents},
     },
     probes::probe_parser::read_packet,
-    wifi::{self, tasks::WifiControlCmd},
+    wifi::{self},
 };
+
+#[cfg(feature = "uplink-wifi")]
+use trailsense_edge::wifi::tasks::WifiControlCmd;
 
 extern crate alloc;
 
@@ -37,6 +45,7 @@ extern crate alloc;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
+#[cfg(feature = "uplink-wifi")]
 static WIFI_CONTROL_CHANNEL: Channel<CriticalSectionRawMutex, WifiControlCmd, 4> = Channel::new();
 
 static SNIFFING_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> = Channel::new();
@@ -91,12 +100,19 @@ async fn main(spawner: Spawner) -> ! {
             }
         };
 
+    #[cfg(not(feature = "uplink-wifi"))]
+    let _ = wifi_controller;
+
     info!("Trailsense node is up");
+    #[cfg(feature = "uplink-wifi")]
     info!("Starting Wifi Setup");
 
+    #[cfg(feature = "uplink-wifi")]
     let mut rng = Rng::new();
+    #[cfg(feature = "uplink-wifi")]
     let (ctx, runner) = wifi::init_stack(&mut rng, interfaces.sta);
 
+    #[cfg(feature = "uplink-wifi")]
     let orchestrator_transport_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
         Ok(p) => p,
         Err(e) => {
@@ -109,6 +125,7 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
+    #[cfg(feature = "uplink-wifi")]
     if let Err(e) = spawner.spawn(wifi::tasks::connect(
         wifi_controller,
         WIFI_CONTROL_CHANNEL.receiver(),
@@ -117,14 +134,26 @@ async fn main(spawner: Spawner) -> ! {
         error!("Failed to spawn connection task: {}", e);
     }
 
+    #[cfg(feature = "uplink-wifi")]
     if let Err(e) = spawner.spawn(wifi::tasks::net_task(runner)) {
         error!("Failed to spawn net task: {}", e);
     }
 
+    #[cfg(feature = "uplink-wifi")]
     info!("Connection is up");
 
     #[cfg(feature = "uplink-wifi")]
     let transport = build_active_transport(ctx, WIFI_CONTROL_CHANNEL.sender());
+
+    #[cfg(feature = "uplink-gsm")]
+    let uart = Uart::new(peripherals.UART2, Config::default().with_baudrate(115200))
+        .unwrap()
+        .with_tx(peripherals.GPIO17)
+        .with_rx(peripherals.GPIO16)
+        .into_async();
+
+    #[cfg(feature = "uplink-gsm")]
+    let transport = build_active_transport(uart, spawner);
 
     let orchestrator_network_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
         Ok(p) => p,

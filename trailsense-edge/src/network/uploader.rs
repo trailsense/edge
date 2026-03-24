@@ -1,8 +1,11 @@
 extern crate alloc;
 
 use crate::{
-    network::{TransportControl, UplinkTransport, types::ConnectionOutcome},
-    orchestration::types::{DataEvents, SystemCmd, SystemEvents, UploadEvents},
+    network::{
+        TransportControl, UplinkTransport,
+        types::{ConnectionOutcome, ControlOutcome},
+    },
+    orchestration::types::{DataEvents, SystemCmd, SystemEvents, TransportEvents, UploadEvents},
 };
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
@@ -29,19 +32,58 @@ pub async fn uploader_task(
         3,
     >,
 ) {
+    #[cfg(feature = "uplink-gsm")]
+    const SEND_TIMEOUT: Duration = Duration::from_secs(90);
+    #[cfg(not(feature = "uplink-gsm"))]
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
     const RETRY_DELAY: Duration = Duration::from_millis(500);
+    #[cfg(feature = "uplink-gsm")]
+    const SEND_ATTEMPTS: u8 = 1;
+    #[cfg(not(feature = "uplink-gsm"))]
     const SEND_ATTEMPTS: u8 = 5;
+    #[cfg(feature = "uplink-gsm")]
+    const GSM_RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
     loop {
         let command = network_command_receiver.receive().await;
-
+        let outcome;
         match command {
             SystemCmd::SetTransportEnabled { id, enabled } => {
                 if enabled {
-                    transport.control(TransportControl::Enable, id).await;
+                    outcome = transport.control(TransportControl::Enable, id).await;
                 } else {
-                    transport.control(TransportControl::Disable, id).await;
+                    outcome = transport.control(TransportControl::Disable, id).await;
+                }
+
+                match outcome {
+                    ControlOutcome::Applied => {
+                        let event = if enabled {
+                            TransportEvents::TransportEnabled
+                        } else {
+                            TransportEvents::TransportDisabled
+                        };
+
+                        orchestrator_event_publisher
+                            .publish(SystemEvents::Transport { id, event })
+                            .await;
+                    }
+                    ControlOutcome::PendingExternalAck => {
+                        // Wifi control publishes transport acks from its own manager task
+                    }
+                    ControlOutcome::Failed => {
+                        error!(
+                            "UPL: transport control failed for id={} enabled={}; publishing best-effort ack",
+                            id.0, enabled
+                        );
+                        let event = if enabled {
+                            TransportEvents::TransportEnabled
+                        } else {
+                            TransportEvents::TransportDisabled
+                        };
+                        orchestrator_event_publisher
+                            .publish(SystemEvents::Transport { id, event })
+                            .await;
+                    }
                 }
             }
             SystemCmd::Connect { id } => {
@@ -110,6 +152,11 @@ pub async fn uploader_task(
                 let event = if ok {
                     UploadEvents::UploadSuccessful
                 } else {
+                    #[cfg(feature = "uplink-gsm")]
+                    {
+                        // Avoid immediately hammering modem HTTP state after failure.
+                        Timer::after(GSM_RECOVERY_DELAY).await;
+                    }
                     UploadEvents::UploadError
                 };
 

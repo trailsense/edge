@@ -3,12 +3,12 @@ use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use esp_hal::{Async, uart::Uart};
 use log::error;
+use serde_json::to_string;
 
 use crate::network::{
     TransportControl, UplinkTransport,
-    gsm::commands::GsmErrorKind,
-    gsm::modem::GsmModem,
-    types::{ConnectionOutcome, SendDataOutcome},
+    gsm::{commands::GsmErrorKind, modem::GsmModem},
+    types::{ConnectionOutcome, ControlOutcome, PackageDto, SendDataOutcome},
 };
 use crate::orchestration::types::CorrelationId;
 use crate::packages::package_store::PackageEntity;
@@ -28,13 +28,39 @@ impl GsmTransport {
 }
 
 impl UplinkTransport for GsmTransport {
-    async fn send_data(&mut self, _packages: Vec<PackageEntity>) -> SendDataOutcome {
+    async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
+        const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
+            Some(v) => v,
+            None => "71ec4873-944e-49c1-b7c4-4b856797715f",
+        };
+
         if !self.auto_connect_enabled {
             return SendDataOutcome::BackoffRequired;
         }
-        // Payload integration comes next; keep the transport surface stable first.
-        self.modem.post_json("[]").await;
-        SendDataOutcome::RetryableFailure
+
+        let payload: Vec<PackageDto<'_>> = packages
+            .iter()
+            .map(|p| PackageDto::new(p.age_in_seconds, p.count, DEVICE_ID))
+            .collect();
+
+        let body = match to_string(&payload) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("GSM payload serialization failed: {:?}", e);
+                return SendDataOutcome::FatalFailure;
+            }
+        };
+
+        match self.modem.post_json(body.as_str()).await {
+            Ok(()) => SendDataOutcome::Success,
+            Err(e) => {
+                error!("GSM post_json failed: {:?}", e);
+                match e.kind() {
+                    GsmErrorKind::Transient => SendDataOutcome::RetryableFailure,
+                    GsmErrorKind::Hard => SendDataOutcome::FatalFailure,
+                }
+            }
+        }
     }
 
     async fn ensure_connected(&mut self) -> ConnectionOutcome {
@@ -53,7 +79,23 @@ impl UplinkTransport for GsmTransport {
         }
     }
 
-    async fn control(&mut self, cmd: TransportControl, _id: CorrelationId) {
+    async fn control(&mut self, cmd: TransportControl, _id: CorrelationId) -> ControlOutcome {
         self.auto_connect_enabled = matches!(cmd, TransportControl::Enable);
+        if !self.auto_connect_enabled {
+            // match self.modem.disconnect().await {
+            //     Ok(()) => ControlOutcome::Applied,
+            //     Err(e) => {
+            //         // Disabling transport is a policy-level switch; teardown is best effort.
+            //         error!(
+            //             "GSM disconnect failed during disable (best-effort): {:?}",
+            //             e
+            //         );
+            //         ControlOutcome::Applied
+            //     }
+            // }
+            ControlOutcome::Applied
+        } else {
+            ControlOutcome::Applied
+        }
     }
 }

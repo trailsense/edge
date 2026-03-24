@@ -19,7 +19,8 @@ const MAX_SAVE_FAILURES: u8 = 5;
 const GENERAL_TIMEOUT: Duration = Duration::from_secs(8);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_SNIFF_TIMEOUT: Duration = Duration::from_secs(8);
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(35);
+// Must exceed uploader SEND_TIMEOUT (GSM is 90s) to avoid overlapping retries.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 enum WaitResult<T> {
     Matched(T),
