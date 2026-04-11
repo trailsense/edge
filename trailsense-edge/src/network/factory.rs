@@ -1,6 +1,6 @@
 use crate::network::active_transport::ActiveTransport;
 #[cfg(feature = "uplink-gsm")]
-use crate::network::gsm::transport::GsmTransport;
+use crate::network::gsm::{commands::GsmError, transport::GsmTransport};
 #[cfg(feature = "uplink-wifi")]
 use crate::wifi::WifiCtx;
 #[cfg(feature = "uplink-wifi")]
@@ -24,6 +24,10 @@ pub fn build_active_transport(
 }
 
 #[cfg(feature = "uplink-gsm")]
-pub fn build_active_transport(uart: Uart<'static, Async>, spawner: Spawner) -> ActiveTransport {
-    return ActiveTransport::Gsm(GsmTransport::new(uart, spawner));
+pub fn build_active_transport(
+    uart: Uart<'static, Async>,
+    spawner: Spawner,
+) -> Result<ActiveTransport, GsmError> {
+    let t = GsmTransport::new(uart, spawner)?;
+    Ok(ActiveTransport::Gsm(t))
 }

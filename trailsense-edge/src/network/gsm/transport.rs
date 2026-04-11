@@ -7,7 +7,10 @@ use serde_json::to_string;
 
 use crate::network::{
     TransportControl, UplinkTransport,
-    gsm::{commands::GsmErrorKind, modem::GsmModem},
+    gsm::{
+        commands::{GsmError, GsmErrorKind},
+        modem::GsmModem,
+    },
     types::{ConnectionOutcome, ControlOutcome, PackageDto, SendDataOutcome},
 };
 use crate::orchestration::types::CorrelationId;
@@ -19,11 +22,16 @@ pub struct GsmTransport {
 }
 
 impl GsmTransport {
-    pub fn new(uart: Uart<'static, Async>, spawner: Spawner) -> Self {
-        GsmTransport {
-            modem: GsmModem::new(uart, spawner),
+    pub fn new(uart: Uart<'static, Async>, spawner: Spawner) -> Result<Self, GsmError> {
+        let modem = GsmModem::new(uart, spawner).map_err(|e| {
+            error!("Error initiating GSM modem: {:?}", e);
+            e
+        })?;
+
+        Ok(GsmTransport {
+            modem,
             auto_connect_enabled: true,
-        }
+        })
     }
 }
 

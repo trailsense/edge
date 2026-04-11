@@ -24,6 +24,7 @@ use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "uplink-gsm")]
 use esp_hal::uart::{Config, Uart};
 use log::{error, info};
+#[cfg(feature = "uplink-wifi")]
 use static_cell::StaticCell;
 use trailsense_edge::{
     network::{self, factory::build_active_transport},
@@ -35,6 +36,8 @@ use trailsense_edge::{
     wifi::{self},
 };
 
+#[cfg(feature = "uplink-gsm")]
+use trailsense_edge::network::gsm::UART_BAUDRATE;
 #[cfg(feature = "uplink-wifi")]
 use trailsense_edge::wifi::tasks::WifiControlCmd;
 
@@ -44,6 +47,7 @@ extern crate alloc;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
+#[cfg(feature = "uplink-wifi")]
 static RADIO_CELL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 #[cfg(feature = "uplink-wifi")]
 static WIFI_CONTROL_CHANNEL: Channel<CriticalSectionRawMutex, WifiControlCmd, 4> = Channel::new();
@@ -53,6 +57,7 @@ static NETWORK_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> =
 static ORCHESTRATOR_EVENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, SystemEvents, 4, 1, 3> =
     PubSubChannel::new();
 
+#[cfg(feature = "uplink-wifi")]
 const INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 const FATAL_SLEEP: Duration = Duration::from_secs(1);
 
@@ -76,6 +81,37 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
+    info!("Trailsense node is up");
+
+    #[cfg(feature = "uplink-gsm")]
+    let uart = match Uart::new(
+        peripherals.UART2,
+        Config::default().with_baudrate(UART_BAUDRATE),
+    ) {
+        Ok(u) => u,
+        Err(e) => {
+            error!("Failed to initialize GSM UART (fatal): {:?}", e);
+            fatal_idle().await;
+        }
+    }
+    .with_tx(peripherals.GPIO17)
+    .with_rx(peripherals.GPIO16)
+    .into_async();
+
+    #[cfg(feature = "uplink-gsm")]
+    let transport = match build_active_transport(uart, spawner) {
+        Ok(t) => t,
+        // TODO: (hw-reset): wire ESP32 GPIO to modem RESET/PWRKEY and attempt hardware reset + reinit before fatal_idle().
+        Err(e) => {
+            error!("Issue initializing GSM module (fatal): {:?}", e);
+            fatal_idle().await;
+        }
+    };
+
+    #[cfg(feature = "uplink-wifi")]
+    info!("Starting Wifi Setup");
+
+    #[cfg(feature = "uplink-wifi")]
     let radio_init = loop {
         match esp_radio::init() {
             Ok(r) => break r,
@@ -89,8 +125,10 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
+    #[cfg(feature = "uplink-wifi")]
     let radio = RADIO_CELL.uninit().write(radio_init);
 
+    #[cfg(feature = "uplink-wifi")]
     let (wifi_controller, interfaces) =
         match esp_radio::wifi::new(radio, peripherals.WIFI, Default::default()) {
             Ok(v) => v,
@@ -99,13 +137,6 @@ async fn main(spawner: Spawner) -> ! {
                 fatal_idle().await;
             }
         };
-
-    #[cfg(not(feature = "uplink-wifi"))]
-    let _ = wifi_controller;
-
-    info!("Trailsense node is up");
-    #[cfg(feature = "uplink-wifi")]
-    info!("Starting Wifi Setup");
 
     #[cfg(feature = "uplink-wifi")]
     let mut rng = Rng::new();
@@ -144,16 +175,6 @@ async fn main(spawner: Spawner) -> ! {
 
     #[cfg(feature = "uplink-wifi")]
     let transport = build_active_transport(ctx, WIFI_CONTROL_CHANNEL.sender());
-
-    #[cfg(feature = "uplink-gsm")]
-    let uart = Uart::new(peripherals.UART2, Config::default().with_baudrate(115200))
-        .unwrap()
-        .with_tx(peripherals.GPIO17)
-        .with_rx(peripherals.GPIO16)
-        .into_async();
-
-    #[cfg(feature = "uplink-gsm")]
-    let transport = build_active_transport(uart, spawner);
 
     let orchestrator_network_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
         Ok(p) => p,
@@ -200,8 +221,18 @@ async fn main(spawner: Spawner) -> ! {
         error!("Failed to spawn wifi manager task: {}", e);
     }
 
+    #[cfg(feature = "uplink-wifi")]
     if let Err(e) = spawner.spawn(wifi::manager::wifi_manager_task(
         interfaces.sniffer,
+        read_packet,
+        SNIFFING_COMMAND_CHANNEL.receiver(),
+        orchestrator_sniffer_publisher,
+    )) {
+        error!("Failed to spawn wifi manager task: {}", e);
+    }
+
+    #[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+    if let Err(e) = spawner.spawn(wifi::manager::gsm_wifi_manager_task(
         read_packet,
         SNIFFING_COMMAND_CHANNEL.receiver(),
         orchestrator_sniffer_publisher,

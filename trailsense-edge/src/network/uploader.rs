@@ -37,6 +37,7 @@ pub async fn uploader_task(
     #[cfg(not(feature = "uplink-gsm"))]
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
     const RETRY_DELAY: Duration = Duration::from_millis(500);
+    // TODO(recovery): track consecutive GSM failures and trigger modem reset/rebootstrap after N failures instead of immediate terminal behavior (hardware reset).
     #[cfg(feature = "uplink-gsm")]
     const SEND_ATTEMPTS: u8 = 1;
     #[cfg(not(feature = "uplink-gsm"))]

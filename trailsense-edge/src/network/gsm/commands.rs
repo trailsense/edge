@@ -94,7 +94,6 @@ impl<const MAX_LEN: usize, const TIMEOUT_MS: u32> AtatCmd for RawPayload<'_, MAX
     type Response = NoResponse;
     const MAX_LEN: usize = MAX_LEN;
     const MAX_TIMEOUT_MS: u32 = TIMEOUT_MS;
-    const EXPECTS_RESPONSE_CODE: bool = false;
 
     fn write(&self, buf: &mut [u8]) -> usize {
         let payload = self.payload.as_bytes();
@@ -148,26 +147,21 @@ pub struct HttpUrcParser;
 impl Parser for HttpUrcParser {
     fn parse(buf: &[u8]) -> Result<(&[u8], usize), ParseError> {
         const URC: &[u8] = b"+HTTPACTION";
-        if let Some(pos) = buf.windows(URC.len()).position(|w| w == URC) {
-            let line = &buf[pos..];
-            if let Some(end) = line.windows(2).position(|w| w == b"\r\n") {
-                return Ok((&line[..end], pos + end + 2));
-            }
-            return Err(ParseError::Incomplete);
-        }
-
-        let max_tail = core::cmp::min(buf.len(), URC.len().saturating_sub(1));
-        for tail in 1..=max_tail {
-            if buf[buf.len() - tail..] == URC[..tail] {
+        let (line, offset) = if let Some(rest) = buf.strip_prefix(b"\r\n") {
+            (rest, 2)
+        } else {
+            (buf, 0)
+        };
+        if !line.starts_with(URC) {
+            if URC.starts_with(line) || b"\r\n+HTTPACTION".starts_with(buf) {
                 return Err(ParseError::Incomplete);
             }
+            return Err(ParseError::NoMatch);
         }
-
-        if b"\r\n+HTTPACTION".starts_with(buf) {
-            return Err(ParseError::Incomplete);
+        if let Some(end) = line.windows(2).position(|w| w == b"\r\n") {
+            return Ok((&line[..end], offset + end + 2));
         }
-
-        Err(ParseError::NoMatch)
+        Err(ParseError::Incomplete)
     }
 }
 
@@ -179,6 +173,7 @@ pub enum GsmError {
     CommandBuildFailed,
     HttpActionTimeout,
     HttpStatus(u16),
+    GsmInitError,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,6 +197,7 @@ impl GsmError {
                 }
             }
             GsmError::Atat(err) => atat_error_kind(err),
+            GsmError::GsmInitError => GsmErrorKind::Hard,
         }
     }
 }
@@ -218,6 +214,9 @@ fn atat_error_kind(err: &AtatError) -> GsmErrorKind {
         | AtatError::Read
         | AtatError::Write
         | AtatError::Aborted
+        | AtatError::Error
+        | AtatError::InvalidResponse
+        | AtatError::Parse
         | AtatError::ConnectionError(_) => GsmErrorKind::Transient,
         AtatError::CmsError(CmsError::NoNetwork | CmsError::NetworkTimeout) => {
             GsmErrorKind::Transient

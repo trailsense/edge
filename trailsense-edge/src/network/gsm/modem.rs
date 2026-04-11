@@ -1,5 +1,5 @@
 use atat::{
-    AtatIngress, DefaultDigester, Error as AtatError, Ingress, Response, ResponseSlot, UrcChannel,
+    AtatIngress, DefaultDigester, Error as AtatError, Ingress, ResponseSlot, UrcChannel,
     UrcSubscription,
     asynch::{AtatClient, Client},
     digest::ParseError,
@@ -12,15 +12,12 @@ use static_cell::StaticCell;
 
 use crate::network::gsm::{
     commands::{GetIpAddr, GsmError, GsmErrorKind, HttpUrcParser, NetOpen, Urc},
-    helpers::{send_raw_cmd, send_raw_cmd_quick, send_raw_payload, send_raw_read_cmd},
+    helpers::{send_raw_cmd, send_raw_payload, send_raw_read_cmd},
 };
 
 pub struct GsmModem {
     client: Client<'static, esp_hal::uart::UartTx<'static, esp_hal::Async>, BUF_SIZE>,
-    res_slot: &'static ResponseSlot<BUF_SIZE>,
     urc_sub: UrcSubscription<'static, Urc, URC_CAPACITY, URC_SUBSCRIBERS>,
-    use_ssl_ignore_cert: bool,
-    use_ssl_sni: bool,
     network_open_confirmed: bool,
 }
 pub const BUF_SIZE: usize = 1024;
@@ -30,14 +27,12 @@ const MAX_IP_RETRIES: usize = 5;
 const IP_RETRY_DELAY: u64 = 1;
 const MAX_CONNECT_RETRIES: usize = 3;
 const CONNECT_RETRY_DELAY: u64 = 2;
-const HTTP_STEP_SETTLE_MS: u64 = 200;
-const HTTP_RECOVERY_SETTLE_MS: u64 = 800;
 const HTTP_POST_ATTEMPTS: usize = 1;
-const HTTP_ACTION_TIMEOUT_SECS: u64 = 30;
-const HTTP_PAYLOAD_RESPONSE_TIMEOUT_SECS: u64 = 20;
+const HTTP_ACTION_TIMEOUT_SECS: u64 = 15;
+const HTTP_DATA_INPUT_TIMEOUT_MS: u32 = 5_000;
 
 impl GsmModem {
-    pub fn new(uart: Uart<'static, Async>, spawner: Spawner) -> Self {
+    pub fn new(uart: Uart<'static, Async>, spawner: Spawner) -> Result<Self, GsmError> {
         let (reader, writer) = uart.split();
 
         static RES_SLOT: ResponseSlot<BUF_SIZE> = ResponseSlot::new();
@@ -45,7 +40,14 @@ impl GsmModem {
         static CLIENT_BUF: StaticCell<[u8; BUF_SIZE]> = StaticCell::new();
         static URC_CHANNEL: UrcChannel<Urc, URC_CAPACITY, URC_SUBSCRIBERS> = UrcChannel::new();
 
-        let urc_sub = URC_CHANNEL.subscribe().unwrap();
+        let urc_sub = match URC_CHANNEL.subscribe() {
+            Ok(u) => u,
+            Err(e) => {
+                error!("GSM Init Error:{e:?}");
+                return Err(GsmError::GsmInitError);
+            }
+        };
+
         let digester =
             DefaultDigester::<HttpUrcParser>::default().with_custom_prompt(simcom_download_prompt);
         let ingress = Ingress::new(
@@ -60,15 +62,15 @@ impl GsmModem {
             CLIENT_BUF.init([0; BUF_SIZE]),
             atat::Config::default(),
         );
-        spawner.spawn(ingress_task(ingress, reader)).unwrap();
-        GsmModem {
-            client,
-            res_slot: &RES_SLOT,
-            urc_sub,
-            use_ssl_ignore_cert: true,
-            use_ssl_sni: true,
-            network_open_confirmed: false,
+        if let Err(e) = spawner.spawn(ingress_task(ingress, reader)) {
+            error!("GSM Init Error:{e}");
+            return Err(GsmError::GsmInitError);
         }
+        Ok(GsmModem {
+            client,
+            urc_sub,
+            network_open_confirmed: false,
+        })
     }
     pub async fn open_network(&mut self) -> Result<(), GsmError> {
         self.client.send(&NetOpen).await?;
@@ -105,7 +107,6 @@ impl GsmModem {
 
         for _attempt in 0..MAX_CONNECT_RETRIES {
             if self.network_open_confirmed {
-                // Only trust the IP fast-path after this runtime has successfully confirmed NETOPEN.
                 match self.client.send(&GetIpAddr).await {
                     Ok(resp) if !resp.ip.is_empty() && resp.ip != "0.0.0.0" => {
                         info!("Already connected; IP address: '{}'", resp.ip);
@@ -115,9 +116,7 @@ impl GsmModem {
                         info!("IP not ready before NETOPEN: '{}'", resp.ip);
                     }
                     Err(e) => {
-                        // Some modem states return a generic error here; continue with NETOPEN path.
                         info!("IP check before NETOPEN returned: {:?}", e);
-                        last_err = Some(GsmError::Atat(e));
                     }
                 }
             } else {
@@ -125,10 +124,7 @@ impl GsmModem {
             }
 
             if let Err(e) = self.open_network().await {
-                // NETOPEN can error if already open or in transitional modem states.
-                // Keep trying to get a valid IP before failing this attempt.
                 info!("NETOPEN returned: {:?}; continuing with IP wait", e);
-                last_err = Some(e);
             }
 
             match self.wait_for_ip().await {
@@ -138,13 +134,11 @@ impl GsmModem {
                     return Ok(());
                 }
                 Err(e) => {
-                    last_err = Some(e);
-                    if matches!(
-                        last_err.as_ref().map(GsmError::kind),
-                        Some(GsmErrorKind::Hard)
-                    ) {
+                    if e.kind() == GsmErrorKind::Hard {
+                        last_err = Some(e);
                         break;
                     }
+                    last_err = Some(e);
                     embassy_time::Timer::after_secs(CONNECT_RETRY_DELAY).await;
                 }
             }
@@ -156,20 +150,25 @@ impl GsmModem {
 
         Err(GsmError::IpTimeout)
     }
-    pub async fn post_json(&mut self, _payload: &str) -> Result<(), GsmError> {
+    pub async fn post_json(&mut self, payload: &str) -> Result<(), GsmError> {
         let mut last_err: Option<GsmError> = None;
 
         for attempt in 1..=HTTP_POST_ATTEMPTS {
             info!("GSM HTTP session start attempt={}", attempt);
-            best_effort_http_reset(&mut self.client).await;
 
-            match self.run_http_post_session().await {
+            match self.run_http_post_session(payload).await {
                 Ok(()) => {
-                    best_effort_http_reset(&mut self.client).await;
                     info!("GSM HTTP upload completed");
                     return Ok(());
                 }
                 Err(e) => {
+                    self.network_open_confirmed = false;
+                    if let Err(disconnect_err) = self.disconnect().await {
+                        info!(
+                            "GSM disconnect after HTTP failure returned: {:?}",
+                            disconnect_err
+                        );
+                    }
                     error!("GSM HTTP session attempt={} failed: {:?}", attempt, e);
                     last_err = Some(e);
                 }
@@ -185,7 +184,6 @@ impl GsmModem {
 
         let http_term_res = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
         if let Err(e) = &http_term_res {
-            // Can fail when HTTP stack is already down; keep going.
             info!("GSM HTTPTERM returned: {:?}", e);
         }
 
@@ -206,8 +204,6 @@ impl GsmModem {
                     info!("GSM still attached during disconnect; ip='{}'", resp.ip);
                 }
                 Err(e) => {
-                    // If modem no longer responds to IP query cleanly after NETCLOSE,
-                    // propagate last transport command error below.
                     info!("GSM IP check after disconnect returned: {:?}", e);
                     break;
                 }
@@ -216,7 +212,6 @@ impl GsmModem {
             embassy_time::Timer::after_secs(DISCONNECT_IP_CHECK_DELAY).await;
         }
 
-        // If NETCLOSE succeeded but IP verification stayed inconclusive, accept as disconnected.
         if net_close_res.is_ok() {
             return Ok(());
         }
@@ -232,64 +227,71 @@ impl GsmModem {
 }
 
 impl GsmModem {
-    async fn run_http_post_session(&mut self) -> Result<(), GsmError> {
-        send_http_step(&mut self.client, "HTTPINIT", "AT+HTTPINIT").await?;
-        send_http_step(
+    async fn run_http_post_session(&mut self, payload: &str) -> Result<(), GsmError> {
+        info!("GSM HTTP step: HTTPTERM");
+        let _ = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
+
+        run_http_step(&mut self.client, "HTTPINIT", "AT+HTTPINIT").await?;
+        run_http_step(
             &mut self.client,
             "CSSLCFG sslversion",
             "AT+CSSLCFG=\"sslversion\",0,4",
         )
         .await?;
-        self.send_optional_ssl_step(
-            "CSSLCFG ignoreretc",
-            "AT+CSSLCFG=\"ignoreretc\",0,1",
-            OptionalSslStep::IgnoreCert,
+        run_http_step(
+            &mut self.client,
+            "CSSLCFG ignorelocaltime",
+            "AT+CSSLCFG=\"ignorelocaltime\",0,1",
         )
         .await?;
-        self.send_optional_ssl_step(
+        run_http_step(
+            &mut self.client,
             "CSSLCFG enableSNI",
             "AT+CSSLCFG=\"enableSNI\",0,1",
-            OptionalSslStep::EnableSni,
         )
         .await?;
-        send_http_step(
+        run_http_step(
             &mut self.client,
             "HTTPPARA SSLCFG",
             "AT+HTTPPARA=\"SSLCFG\",0",
         )
         .await?;
-        send_http_step(
+        run_http_step(
             &mut self.client,
             "HTTPPARA URL",
             "AT+HTTPPARA=\"URL\",\"https://api.trailsense.daugt.com/ingest\"",
         )
         .await?;
-        send_http_step(
+        run_http_step(
             &mut self.client,
             "HTTPPARA CONTENT",
             "AT+HTTPPARA=\"CONTENT\",\"application/json\"",
         )
         .await?;
 
-        // Temporary: fixed payload from the original validated modem script for parity.
-        let payload = "[{\"age_in_seconds\":69,\"count\":69,\"node_id\":\"71ec4873-944e-49c1-b7c4-4b856797715f\"}]";
         info!("GSM HTTP upload start; payload_len={}", payload.len());
 
         let mut cmd = atat::heapless::String::<64>::new();
-        if write!(cmd, "AT+HTTPDATA={},5000", payload.len()).is_err() {
+        if write!(
+            cmd,
+            "AT+HTTPDATA={},{}",
+            payload.len(),
+            HTTP_DATA_INPUT_TIMEOUT_MS
+        )
+        .is_err()
+        {
             return Err(GsmError::CommandBuildFailed);
         }
 
-        send_http_step(&mut self.client, "HTTPDATA", &cmd).await?;
+        run_http_step(&mut self.client, "HTTPDATA", cmd.as_str()).await?;
 
         info!("GSM HTTP step: PAYLOAD");
         if let Err(e) = send_raw_payload(&mut self.client, payload).await {
             error!("GSM HTTP step failed: PAYLOAD: {:?}", e);
             return Err(e);
         }
-        wait_for_payload_response(self.res_slot).await?;
 
-        send_http_step(&mut self.client, "HTTPACTION=1", "AT+HTTPACTION=1").await?;
+        run_http_step(&mut self.client, "HTTPACTION=1", "AT+HTTPACTION=1").await?;
 
         info!("GSM HTTP step: wait HTTPACTION URC");
         let action = match embassy_time::with_timeout(
@@ -325,73 +327,22 @@ impl GsmModem {
         if let Ok(body) = send_raw_read_cmd(&mut self.client, "AT+HTTPREAD=0,512").await {
             info!("HTTPREAD body: {}", body);
         }
-        embassy_time::Timer::after_millis(HTTP_STEP_SETTLE_MS).await;
+        let _ = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
         Ok(())
     }
-
-    async fn send_optional_ssl_step(
-        &mut self,
-        step: &str,
-        cmd: &str,
-        optional_step: OptionalSslStep,
-    ) -> Result<(), GsmError> {
-        let enabled = match optional_step {
-            OptionalSslStep::IgnoreCert => self.use_ssl_ignore_cert,
-            OptionalSslStep::EnableSni => self.use_ssl_sni,
-        };
-
-        if !enabled {
-            info!("GSM HTTP step skipped: {}", step);
-            return Ok(());
-        }
-
-        match send_http_step(&mut self.client, step, cmd).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                match optional_step {
-                    OptionalSslStep::IgnoreCert => self.use_ssl_ignore_cert = false,
-                    OptionalSslStep::EnableSni => self.use_ssl_sni = false,
-                }
-                info!("Disabling optional GSM SSL step after failure: {}", step);
-                Err(e)
-            }
-        }
-    }
 }
 
-enum OptionalSslStep {
-    IgnoreCert,
-    EnableSni,
-}
-
-async fn send_http_step(
+async fn run_http_step(
     client: &mut Client<'_, esp_hal::uart::UartTx<'_, esp_hal::Async>, BUF_SIZE>,
-    step: &str,
+    label: &str,
     cmd: &str,
 ) -> Result<(), GsmError> {
-    info!("GSM HTTP step: {}", step);
+    info!("GSM HTTP step: {}", label);
     if let Err(e) = send_raw_cmd(client, cmd).await {
-        error!("GSM HTTP step failed: {}: {:?}", step, e);
+        error!("GSM HTTP step failed: {}: {:?}", label, e);
         return Err(e);
     }
-    embassy_time::Timer::after_millis(HTTP_STEP_SETTLE_MS).await;
     Ok(())
-}
-
-async fn best_effort_http_reset(
-    client: &mut Client<'_, esp_hal::uart::UartTx<'_, esp_hal::Async>, BUF_SIZE>,
-) {
-    match send_raw_cmd_quick(client, "AT").await {
-        Ok(()) => info!("GSM modem sync step: AT"),
-        Err(e) => info!("GSM modem sync step AT returned: {:?}", e),
-    }
-    embassy_time::Timer::after_millis(HTTP_STEP_SETTLE_MS).await;
-
-    match send_raw_cmd_quick(client, "AT+HTTPTERM").await {
-        Ok(()) => info!("GSM modem reset step: HTTPTERM"),
-        Err(e) => info!("GSM modem reset step HTTPTERM returned: {:?}", e),
-    }
-    embassy_time::Timer::after_millis(HTTP_RECOVERY_SETTLE_MS).await;
 }
 
 async fn log_http_action_timeout_diagnostics(
@@ -410,82 +361,13 @@ async fn log_http_action_timeout_diagnostics(
     }
 }
 
-async fn wait_for_payload_response(
-    res_slot: &'static ResponseSlot<BUF_SIZE>,
-) -> Result<(), GsmError> {
-    info!("GSM HTTP step: wait PAYLOAD response");
-    let guard = match embassy_time::with_timeout(
-        embassy_time::Duration::from_secs(HTTP_PAYLOAD_RESPONSE_TIMEOUT_SECS),
-        res_slot.get(),
-    )
-    .await
-    {
-        Ok(guard) => guard,
-        Err(_) => {
-            error!("GSM HTTP step failed: wait PAYLOAD response timeout");
-            res_slot.reset();
-            return Err(GsmError::Atat(AtatError::Timeout));
-        }
-    };
-
-    let response = guard.borrow();
-    match &*response {
-        Response::Ok(bytes) if bytes.is_empty() => {
-            info!("GSM HTTP step: PAYLOAD response OK");
-        }
-        Response::Ok(bytes) => {
-            if let Ok(text) = core::str::from_utf8(bytes.as_slice()) {
-                info!("GSM HTTP step: PAYLOAD response text: {}", text);
-            } else {
-                info!("GSM HTTP step: PAYLOAD response bytes_len={}", bytes.len());
-            }
-        }
-        Response::TimeoutError => {
-            error!("GSM HTTP step failed: PAYLOAD response timeout error");
-            drop(response);
-            res_slot.reset();
-            return Err(GsmError::Atat(AtatError::Timeout));
-        }
-        Response::ReadError => {
-            error!("GSM HTTP step failed: PAYLOAD response read error");
-            drop(response);
-            res_slot.reset();
-            return Err(GsmError::Atat(AtatError::Read));
-        }
-        Response::WriteError => {
-            error!("GSM HTTP step failed: PAYLOAD response write error");
-            drop(response);
-            res_slot.reset();
-            return Err(GsmError::Atat(AtatError::Write));
-        }
-        Response::AbortedError => {
-            error!("GSM HTTP step failed: PAYLOAD response aborted");
-            drop(response);
-            res_slot.reset();
-            return Err(GsmError::Atat(AtatError::Aborted));
-        }
-        other => {
-            info!("GSM HTTP step: PAYLOAD response other: {:?}", other);
-        }
-    }
-    drop(response);
-    res_slot.reset();
-    Ok(())
-}
-
 fn simcom_download_prompt(buf: &[u8]) -> Result<(u8, usize), ParseError> {
-    // In integrated runtime we can receive extra bytes/URCs ahead of the DOWNLOAD prompt.
-    // Accept the prompt even when it is not at buffer start.
     for p in [b"\r\nDOWNLOAD\r\n".as_slice(), b"DOWNLOAD\r\n".as_slice()] {
-        if let Some(pos) = buf.windows(p.len()).position(|w| w == p) {
-            return Ok((b'>', pos + p.len()));
+        if buf.starts_with(p) {
+            return Ok((b'>', p.len()));
         }
-        // If buffer tail is a prefix of the prompt, wait for more bytes.
-        let max_tail = core::cmp::min(buf.len(), p.len().saturating_sub(1));
-        for tail in 1..=max_tail {
-            if buf[buf.len() - tail..] == p[..tail] {
-                return Err(ParseError::Incomplete);
-            }
+        if p.starts_with(buf) {
+            return Err(ParseError::Incomplete);
         }
     }
     Err(ParseError::NoMatch)
