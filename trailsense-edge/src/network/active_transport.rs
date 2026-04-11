@@ -17,53 +17,37 @@ use crate::{
     packages::package_store::PackageEntity,
 };
 
-#[cfg(feature = "uplink-wifi")]
 pub enum ActiveTransport {
+    #[cfg(feature = "uplink-wifi")]
     Wifi(WifiTransport),
-}
-
-#[cfg(feature = "uplink-wifi")]
-impl UplinkTransport for ActiveTransport {
-    async fn ensure_connected(&mut self) -> ConnectionOutcome {
-        match self {
-            ActiveTransport::Wifi(t) => t.ensure_connected().await,
-        }
-    }
-
-    async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
-        match self {
-            ActiveTransport::Wifi(t) => t.send_data(packages).await,
-        }
-    }
-
-    async fn control(&mut self, cmd: super::TransportControl, id: CorrelationId) -> ControlOutcome {
-        match self {
-            ActiveTransport::Wifi(t) => t.control(cmd, id).await,
-        }
-    }
-}
-
-#[cfg(feature = "uplink-gsm")]
-pub enum ActiveTransport {
+    #[cfg(feature = "uplink-gsm")]
     Gsm(GsmTransport),
 }
 
-#[cfg(feature = "uplink-gsm")]
 impl UplinkTransport for ActiveTransport {
     async fn ensure_connected(&mut self) -> ConnectionOutcome {
         match self {
+            #[cfg(feature = "uplink-wifi")]
+            ActiveTransport::Wifi(t) => t.ensure_connected().await,
+            #[cfg(feature = "uplink-gsm")]
             ActiveTransport::Gsm(t) => t.ensure_connected().await,
         }
     }
 
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
         match self {
+            #[cfg(feature = "uplink-wifi")]
+            ActiveTransport::Wifi(t) => t.send_data(packages).await,
+            #[cfg(feature = "uplink-gsm")]
             ActiveTransport::Gsm(t) => t.send_data(packages).await,
         }
     }
 
     async fn control(&mut self, cmd: super::TransportControl, id: CorrelationId) -> ControlOutcome {
         match self {
+            #[cfg(feature = "uplink-wifi")]
+            ActiveTransport::Wifi(t) => t.control(cmd, id).await,
+            #[cfg(feature = "uplink-gsm")]
             ActiveTransport::Gsm(t) => t.control(cmd, id).await,
         }
     }

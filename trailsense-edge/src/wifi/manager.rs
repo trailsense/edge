@@ -1,18 +1,18 @@
 extern crate alloc;
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use alloc::boxed::Box;
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use core::ptr::NonNull;
 use embassy_sync::channel::Receiver;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, pubsub::Publisher};
 
 use embassy_time::{Duration, Timer};
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use esp_hal::peripherals::WIFI;
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use esp_radio::Controller;
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use esp_radio::wifi::{AuthMethod, ClientConfig, ModeConfig, WifiController, WifiError};
 use esp_radio::wifi::{PromiscuousPkt, Sniffer};
 use log::{error, info};
@@ -20,20 +20,20 @@ use log::{error, info};
 use crate::orchestration::types::{SnifferEvents, SystemCmd, SystemEvents};
 
 const RADIO_SETTLE_DELAY: Duration = Duration::from_secs(5);
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_PROMISCUOUS_DISABLE_SETTLE_DELAY: Duration = Duration::from_millis(500);
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_WIFI_STOP_SETTLE_DELAY: Duration = Duration::from_secs(5);
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_WIFI_START_SETTLE_DELAY: Duration = Duration::from_secs(2);
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_SNIFFER_SSID: &str = "trailsense-sniffer";
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 struct OwnedRadioController {
     ptr: NonNull<Controller<'static>>,
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 impl OwnedRadioController {
     fn new(controller: Controller<'static>) -> (Self, &'static mut Controller<'static>) {
         let radio_ref: &'static mut Controller<'static> = Box::leak(Box::new(controller));
@@ -42,7 +42,7 @@ impl OwnedRadioController {
     }
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 impl Drop for OwnedRadioController {
     fn drop(&mut self) {
         // SAFETY: `ptr` comes from `Box::leak` in `OwnedRadioController::new`
@@ -120,7 +120,7 @@ pub async fn wifi_manager_task(
     }
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 #[embassy_executor::task]
 pub async fn gsm_wifi_manager_task(
     callback: fn(PromiscuousPkt),
@@ -246,7 +246,7 @@ pub async fn gsm_wifi_manager_task(
     }
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 async fn create_gsm_sniffer_runtime() -> Result<
     (
         OwnedRadioController,
@@ -280,7 +280,7 @@ async fn create_gsm_sniffer_runtime() -> Result<
     Ok((radio, controller, interfaces.sniffer))
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 fn gsm_sniffer_mode_config() -> ModeConfig {
     ModeConfig::Client(
         ClientConfig::default()

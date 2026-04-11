@@ -13,7 +13,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender
 use esp_hal::{Async, uart::Uart};
 
 #[cfg(feature = "uplink-wifi")]
-pub fn build_active_transport(
+pub fn build_active_transport_wifi(
     ctx: WifiCtx,
     wifi_control_sender: Sender<'static, CriticalSectionRawMutex, WifiControlCmd, 4>,
 ) -> ActiveTransport {
@@ -24,7 +24,7 @@ pub fn build_active_transport(
 }
 
 #[cfg(feature = "uplink-gsm")]
-pub fn build_active_transport(
+pub fn build_active_transport_gsm(
     uart: Uart<'static, Async>,
     spawner: Spawner,
 ) -> Result<ActiveTransport, GsmError> {

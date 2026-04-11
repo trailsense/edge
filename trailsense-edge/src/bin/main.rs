@@ -27,7 +27,7 @@ use log::{error, info};
 #[cfg(feature = "uplink-wifi")]
 use static_cell::StaticCell;
 use trailsense_edge::{
-    network::{self, factory::build_active_transport},
+    network::{self},
     orchestration::{
         orchestrator::orchestrate_node,
         types::{SystemCmd, SystemEvents},
@@ -37,7 +37,11 @@ use trailsense_edge::{
 };
 
 #[cfg(feature = "uplink-gsm")]
+use trailsense_edge::network::factory::build_active_transport_gsm;
+#[cfg(feature = "uplink-gsm")]
 use trailsense_edge::network::gsm::UART_BAUDRATE;
+#[cfg(feature = "uplink-wifi")]
+use trailsense_edge::network::factory::build_active_transport_wifi;
 #[cfg(feature = "uplink-wifi")]
 use trailsense_edge::wifi::tasks::WifiControlCmd;
 
@@ -99,7 +103,7 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
 
     #[cfg(feature = "uplink-gsm")]
-    let transport = match build_active_transport(uart, spawner) {
+    let transport = match build_active_transport_gsm(uart, spawner) {
         Ok(t) => t,
         // TODO: (hw-reset): wire ESP32 GPIO to modem RESET/PWRKEY and attempt hardware reset + reinit before fatal_idle().
         Err(e) => {
@@ -174,7 +178,7 @@ async fn main(spawner: Spawner) -> ! {
     info!("Connection is up");
 
     #[cfg(feature = "uplink-wifi")]
-    let transport = build_active_transport(ctx, WIFI_CONTROL_CHANNEL.sender());
+    let transport = build_active_transport_wifi(ctx, WIFI_CONTROL_CHANNEL.sender());
 
     let orchestrator_network_publisher = match ORCHESTRATOR_EVENT_CHANNEL.publisher() {
         Ok(p) => p,
@@ -231,7 +235,7 @@ async fn main(spawner: Spawner) -> ! {
         error!("Failed to spawn wifi manager task: {}", e);
     }
 
-    #[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+    #[cfg(feature = "uplink-gsm")]
     if let Err(e) = spawner.spawn(wifi::manager::gsm_wifi_manager_task(
         read_packet,
         SNIFFING_COMMAND_CHANNEL.receiver(),

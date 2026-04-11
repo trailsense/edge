@@ -1,11 +1,11 @@
 use embassy_net::Runner;
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use embassy_sync::channel::Sender;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
 };
 use embassy_time::{Duration, Timer};
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 use esp_radio::wifi::{AuthMethod, InternalWifiError, WifiError};
 use esp_radio::wifi::{ClientConfig, ModeConfig, WifiController, WifiDevice, WifiStaState};
 use log::{error, info};
@@ -19,11 +19,11 @@ const WIFI_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const RECONNECT_SETTLE_DELAY: Duration = Duration::from_secs(2);
 const RESTART_SETTLE_DELAY: Duration = Duration::from_secs(2);
 const CONNECT_FAILURE_RESTART_THRESHOLD: u8 = 6;
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_RADIO_STOP_SETTLE_DELAY: Duration = Duration::from_secs(5);
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_RADIO_START_SETTLE_DELAY: Duration = Duration::from_secs(2);
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 const GSM_SNIFFER_SSID: &str = "trailsense-sniffer";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -33,14 +33,14 @@ pub enum WifiControlCmd {
     SetAutoConnect { enabled: bool, id: CorrelationId },
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GsmRadioCmd {
     PauseForUpload,
     ResumeForSniffing,
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GsmRadioAck {
     Paused,
@@ -245,7 +245,7 @@ pub async fn connect(
     }
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 #[embassy_executor::task]
 pub async fn gsm_radio_control(
     mut controller: WifiController<'static>,
@@ -286,7 +286,7 @@ pub async fn gsm_radio_control(
     }
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 async fn pause_radio_for_upload(controller: &mut WifiController<'static>) -> Result<(), WifiError> {
     match controller.is_started() {
         Ok(false) => {
@@ -305,7 +305,7 @@ async fn pause_radio_for_upload(controller: &mut WifiController<'static>) -> Res
     }
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 async fn resume_radio_for_sniffing(
     controller: &mut WifiController<'static>,
 ) -> Result<(), WifiError> {
@@ -326,12 +326,12 @@ async fn resume_radio_for_sniffing(
     Ok(())
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 fn wifi_not_started(err: &WifiError) -> bool {
     matches!(err, WifiError::InternalError(InternalWifiError::NotStarted))
 }
 
-#[cfg(all(feature = "uplink-gsm", not(feature = "uplink-wifi")))]
+#[cfg(feature = "uplink-gsm")]
 fn gsm_sniffer_mode_config() -> ModeConfig {
     ModeConfig::Client(
         ClientConfig::default()

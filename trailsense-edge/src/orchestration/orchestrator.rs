@@ -108,12 +108,21 @@ pub async fn orchestrate_node(
                     SystemEvents::Transport {
                         id: ev_id,
                         event: TransportEvents::TransportDisabled,
-                    } if ev_id == transport_id => Some(()),
+                    } if ev_id == transport_id => Some(Ok(())),
+                    SystemEvents::Transport {
+                        id: ev_id,
+                        event: TransportEvents::TransportControlFailed,
+                    } if ev_id == transport_id => Some(Err(())),
                     _ => None,
                 })
                 .await
                 {
-                    WaitResult::Matched(()) => {}
+                    WaitResult::Matched(Ok(())) => {}
+                    WaitResult::Matched(Err(())) => {
+                        error!("FSM: transport disable rejected by transport control");
+                        current_state = SystemState::Sniffing;
+                        continue;
+                    }
                     WaitResult::Timeout => {
                         error!("FSM: timeout waiting for transport disable ack");
                         current_state = SystemState::Sniffing;
@@ -207,14 +216,23 @@ pub async fn orchestrate_node(
                     SystemEvents::Transport {
                         id: ev_id,
                         event: TransportEvents::TransportEnabled,
-                    } if ev_id == transport_id => Some(()),
+                    } if ev_id == transport_id => Some(Ok(())),
+                    SystemEvents::Transport {
+                        id: ev_id,
+                        event: TransportEvents::TransportControlFailed,
+                    } if ev_id == transport_id => Some(Err(())),
                     _ => None,
                 })
                 .await
                 {
-                    WaitResult::Matched(()) => {
+                    WaitResult::Matched(Ok(())) => {
                         uplink_transport_enabled = true;
                         current_state = SystemState::Connecting;
+                    }
+                    WaitResult::Matched(Err(())) => {
+                        error!("FSM: transport enable rejected by transport control");
+                        current_state = SystemState::Sniffing;
+                        continue;
                     }
                     WaitResult::Timeout => {
                         error!("FSM: timeout waiting for transport enable ack");
@@ -312,13 +330,20 @@ pub async fn orchestrate_node(
                         SystemEvents::Transport {
                             id: ev_id,
                             event: TransportEvents::TransportDisabled,
-                        } if ev_id == transport_id => Some(()),
+                        } if ev_id == transport_id => Some(Ok(())),
+                        SystemEvents::Transport {
+                            id: ev_id,
+                            event: TransportEvents::TransportControlFailed,
+                        } if ev_id == transport_id => Some(Err(())),
                         _ => None,
                     })
                     .await
                     {
-                        WaitResult::Matched(()) => {
+                        WaitResult::Matched(Ok(())) => {
                             uplink_transport_enabled = false;
+                        }
+                        WaitResult::Matched(Err(())) => {
+                            error!("FSM: transport disable rejected in SavingData");
                         }
                         WaitResult::Timeout => {
                             error!("FSM: timeout waiting for transport disable in SavingData");

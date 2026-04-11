@@ -73,14 +73,11 @@ pub async fn uploader_task(
                     }
                     ControlOutcome::Failed => {
                         error!(
-                            "UPL: transport control failed for id={} enabled={}; publishing best-effort ack",
+                            "UPL: transport control failed for id={} enabled={}; publishing failure",
                             id.0, enabled
                         );
-                        let event = if enabled {
-                            TransportEvents::TransportEnabled
-                        } else {
-                            TransportEvents::TransportDisabled
-                        };
+                        let event = TransportEvents::TransportControlFailed;
+
                         orchestrator_event_publisher
                             .publish(SystemEvents::Transport { id, event })
                             .await;
