@@ -147,6 +147,7 @@ pub async fn wifi_manager_task(
 pub async fn gsm_wifi_manager_task(
     callback: fn(PromiscuousPkt),
     sniffer_command_receiver: Receiver<'static, CriticalSectionRawMutex, SystemCmd, 4>,
+    wifi_peripheral: WIFI<'static>,
     orchestrator_event_publisher: Publisher<
         'static,
         CriticalSectionRawMutex,
@@ -156,6 +157,7 @@ pub async fn gsm_wifi_manager_task(
         3,
     >,
 ) {
+    let mut wifi_peripheral = Some(wifi_peripheral);
     let mut gsm_sniffer_runtime: Option<GsmSnifferRuntime> = None;
 
     loop {
@@ -164,7 +166,20 @@ pub async fn gsm_wifi_manager_task(
         match command {
             SystemCmd::StartSniffing { id } => {
                 if gsm_sniffer_runtime.is_none() {
-                    match create_gsm_sniffer_runtime().await {
+                    let Some(wifi) = wifi_peripheral.take() else {
+                        error!(
+                            "GSM radio control: WIFI peripheral already consumed; cannot create runtime"
+                        );
+                        orchestrator_event_publisher
+                            .publish(SystemEvents::Sniffer {
+                                id,
+                                event: SnifferEvents::SniffingError,
+                            })
+                            .await;
+                        continue;
+                    };
+
+                    match create_gsm_sniffer_runtime(wifi).await {
                         Ok(gsr) => gsm_sniffer_runtime = Some(gsr),
                         Err(e) => {
                             error!(
@@ -219,10 +234,8 @@ pub async fn gsm_wifi_manager_task(
             }
 
             SystemCmd::StopSniffing { id } => {
-                let mut runtime = gsm_sniffer_runtime.take();
-
-                if let Some(active_runtime) = runtime.as_mut() {
-                    match active_runtime.sniffer.set_promiscuous_mode(false) {
+                if let Some(rt) = gsm_sniffer_runtime.as_mut() {
+                    match rt.sniffer.set_promiscuous_mode(false) {
                         Ok(()) => info!("Disabled Promiscuous mode"),
                         Err(e) => error!("Failed to disable promiscuous mode: {:?}", e),
                     }
@@ -232,9 +245,9 @@ pub async fn gsm_wifi_manager_task(
 
                 Timer::after(GSM_PROMISCUOUS_DISABLE_SETTLE_DELAY).await;
 
-                if let Some(active_runtime) = runtime.as_mut() {
+                if let Some(rt) = gsm_sniffer_runtime.as_mut() {
                     info!("GSM radio control: fully deinitializing Wi-Fi for GSM upload");
-                    if let Err(e) = active_runtime.controller.stop_async().await {
+                    if let Err(e) = rt.controller.stop_async().await {
                         info!(
                             "GSM radio control: stop_async before deinit returned: {:?}",
                             e
@@ -242,7 +255,6 @@ pub async fn gsm_wifi_manager_task(
                     }
                 }
 
-                drop(runtime);
                 Timer::after(GSM_WIFI_STOP_SETTLE_DELAY).await;
 
                 orchestrator_event_publisher
@@ -261,19 +273,15 @@ pub async fn gsm_wifi_manager_task(
 }
 
 #[cfg(feature = "uplink-gsm")]
-async fn create_gsm_sniffer_runtime() -> Result<GsmSnifferRuntime, WifiError> {
+async fn create_gsm_sniffer_runtime(wifi: WIFI<'static>) -> Result<GsmSnifferRuntime, WifiError> {
     let radio = esp_radio::init()
         .map_err(|_| WifiError::InternalError(esp_radio::wifi::InternalWifiError::State))?;
     let (radio, radio_ref) = OwnedRadioController::new(radio);
-    let (mut controller, interfaces) = match esp_radio::wifi::new(
-        radio_ref,
-        // TODO(hw): avoid `WIFI::steal()` by wiring owned WIFI peripheral from `main`.
-        unsafe { WIFI::steal() },
-        Default::default(),
-    ) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let (mut controller, interfaces) =
+        match esp_radio::wifi::new(radio_ref, wifi, Default::default()) {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        };
 
     if let Err(e) = controller.set_config(&gsm_sniffer_mode_config()) {
         return Err(e);

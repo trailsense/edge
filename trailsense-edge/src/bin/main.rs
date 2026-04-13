@@ -239,6 +239,7 @@ async fn main(spawner: Spawner) -> ! {
     if let Err(e) = spawner.spawn(wifi::manager::gsm_wifi_manager_task(
         read_packet,
         SNIFFING_COMMAND_CHANNEL.receiver(),
+        peripherals.WIFI,
         orchestrator_sniffer_publisher,
     )) {
         error!("Failed to spawn wifi manager task: {}", e);
