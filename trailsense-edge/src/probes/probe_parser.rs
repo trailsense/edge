@@ -7,7 +7,10 @@ use ieee80211::{
 };
 use log::warn;
 
-use crate::probes::{fingerprint_store, models::MODEL};
+use crate::probes::{
+    fingerprint_store,
+    models::{MODEL, MODEL_SIZE},
+};
 
 /// # Fingerprint Probe
 ///
@@ -20,10 +23,11 @@ use crate::probes::{fingerprint_store, models::MODEL};
 ///
 /// # Returns
 ///
-/// A `u16` value is returned, where each bit represents one bit of the filter.
-fn fingerprint_probe(data: &[u8]) -> u16 {
-    // Change to u32 or as needed if increasing filter size (with u32, 32 filters are usable).
-    let mut fingerprint = 0u16;
+/// A `u64` value is returned, where each bit represents one bit of the filter.
+fn fingerprint_probe(data: &[u8]) -> u64 {
+    // Change to filter size as needed if increasing filter size. Currently using 64 bit filters.
+    let mut fingerprint: u64 = 0u64;
+    debug_assert_eq!(MODEL_SIZE, 64);
 
     for (idx, model) in MODEL.iter().enumerate() {
         let max_iterations = core::cmp::min(

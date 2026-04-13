@@ -18,6 +18,8 @@ use esp_hal::peripherals::Peripherals;
 #[cfg(feature = "uplink-wifi")]
 use esp_hal::rng::Rng;
 
+use trailsense_edge::probes::models::{DEDUP_MODEL_VERSION, MODEL_SIZE, TAU};
+
 use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
 
@@ -32,7 +34,7 @@ use trailsense_edge::{
         orchestrator::orchestrate_node,
         types::{SystemCmd, SystemEvents},
     },
-    probes::probe_parser::read_packet,
+    probes::{counter::validate_runtime_model_config, probe_parser::read_packet},
     wifi::{self},
 };
 
@@ -242,6 +244,16 @@ async fn main(spawner: Spawner) -> ! {
         orchestrator_sniffer_publisher,
     )) {
         error!("Failed to spawn wifi manager task: {}", e);
+    }
+
+    match validate_runtime_model_config() {
+        true => info!(
+            "DEDUP config is working: version = {}, bits = {}, tau={}",
+            DEDUP_MODEL_VERSION, MODEL_SIZE, TAU
+        ),
+        false => {
+            error! {"DEDUP config is not correct."}
+        }
     }
 
     loop {
