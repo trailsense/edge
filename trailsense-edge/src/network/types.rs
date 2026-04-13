@@ -28,3 +28,10 @@ pub enum ConnectionOutcome {
     Disconnected,
     Failure,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ControlOutcome {
+    Applied,
+    PendingExternalAck,
+    Failed,
+}

@@ -4,6 +4,7 @@ name         = "trailsense-edge"
 rust-version = "1.88"
 version      = "0.1.0"
 description  = "Privacy focused people counting"
+default-run  = "trailsense-edge"
 
 [[bin]]
 name = "trailsense-edge"
@@ -75,6 +76,7 @@ serde_json = { version = "1.0.149", default-features = false, features = ["alloc
 serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
 der = { version = "0.8.0", features = ["heapless"] }
 embassy-futures = "0.1.2"
+atat = { version = "0.24.1", features = ["derive"],  optional = true }
 
 [profile.dev]
 # Rust debug is too slow.
@@ -91,6 +93,6 @@ opt-level        = 's'
 overflow-checks  = false
 
 [features]
-default = ["uplink-wifi"]
+default = ["uplink-gsm"]
 uplink-wifi = []
-uplink-gsm = []
+uplink-gsm = ["dep:atat"]

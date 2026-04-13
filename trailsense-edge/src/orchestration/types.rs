@@ -57,6 +57,7 @@ pub enum SnifferEvents {
 pub enum TransportEvents {
     TransportEnabled,
     TransportDisabled,
+    TransportControlFailed,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
