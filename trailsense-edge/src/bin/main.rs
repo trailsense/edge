@@ -38,10 +38,10 @@ use trailsense_edge::{
 
 #[cfg(feature = "uplink-gsm")]
 use trailsense_edge::network::factory::build_active_transport_gsm;
-#[cfg(feature = "uplink-gsm")]
-use trailsense_edge::network::gsm::UART_BAUDRATE;
 #[cfg(feature = "uplink-wifi")]
 use trailsense_edge::network::factory::build_active_transport_wifi;
+#[cfg(feature = "uplink-gsm")]
+use trailsense_edge::network::gsm::UART_BAUDRATE;
 #[cfg(feature = "uplink-wifi")]
 use trailsense_edge::wifi::tasks::WifiControlCmd;
 

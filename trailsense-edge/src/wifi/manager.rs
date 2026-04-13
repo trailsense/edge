@@ -43,6 +43,28 @@ impl OwnedRadioController {
 }
 
 #[cfg(feature = "uplink-gsm")]
+struct GsmSnifferRuntime {
+    controller: WifiController<'static>,
+    sniffer: Sniffer<'static>,
+    _radio_owner: OwnedRadioController,
+}
+
+#[cfg(feature = "uplink-gsm")]
+impl GsmSnifferRuntime {
+    fn new(
+        controller: WifiController<'static>,
+        sniffer: Sniffer<'static>,
+        radio_owner: OwnedRadioController,
+    ) -> Self {
+        GsmSnifferRuntime {
+            controller,
+            sniffer,
+            _radio_owner: radio_owner,
+        }
+    }
+}
+
+#[cfg(feature = "uplink-gsm")]
 impl Drop for OwnedRadioController {
     fn drop(&mut self) {
         // SAFETY: `ptr` comes from `Box::leak` in `OwnedRadioController::new`
@@ -134,22 +156,16 @@ pub async fn gsm_wifi_manager_task(
         3,
     >,
 ) {
-    let mut radio: Option<OwnedRadioController> = None;
-    let mut controller: Option<WifiController<'static>> = None;
-    let mut sniffer: Option<Sniffer<'static>> = None;
+    let mut gsm_sniffer_runtime: Option<GsmSnifferRuntime> = None;
 
     loop {
         let command = sniffer_command_receiver.receive().await;
 
         match command {
             SystemCmd::StartSniffing { id } => {
-                if radio.is_none() || controller.is_none() || sniffer.is_none() {
+                if gsm_sniffer_runtime.is_none() {
                     match create_gsm_sniffer_runtime().await {
-                        Ok((new_radio, new_controller, new_sniffer)) => {
-                            radio = Some(new_radio);
-                            controller = Some(new_controller);
-                            sniffer = Some(new_sniffer);
-                        }
+                        Ok(gsr) => gsm_sniffer_runtime = Some(gsr),
                         Err(e) => {
                             error!(
                                 "GSM radio control: failed to create Wi-Fi/sniffer runtime: {:?}",
@@ -166,20 +182,23 @@ pub async fn gsm_wifi_manager_task(
                     }
                 }
 
-                let Some(active_sniffer) = sniffer.as_mut() else {
-                    orchestrator_event_publisher
-                        .publish(SystemEvents::Sniffer {
-                            id,
-                            event: SnifferEvents::SniffingError,
-                        })
-                        .await;
-                    continue;
+                let active_runtime = match gsm_sniffer_runtime.as_mut() {
+                    Some(rt) => rt,
+                    None => {
+                        orchestrator_event_publisher
+                            .publish(SystemEvents::Sniffer {
+                                id,
+                                event: SnifferEvents::SniffingError,
+                            })
+                            .await;
+                        continue;
+                    }
                 };
 
-                match active_sniffer.set_promiscuous_mode(true) {
+                match active_runtime.sniffer.set_promiscuous_mode(true) {
                     Ok(()) => {
                         info!("Enabled Promiscuous Mode");
-                        active_sniffer.set_receive_cb(callback);
+                        active_runtime.sniffer.set_receive_cb(callback);
                         orchestrator_event_publisher
                             .publish(SystemEvents::Sniffer {
                                 id,
@@ -200,8 +219,10 @@ pub async fn gsm_wifi_manager_task(
             }
 
             SystemCmd::StopSniffing { id } => {
-                if let Some(active_sniffer) = sniffer.as_mut() {
-                    match active_sniffer.set_promiscuous_mode(false) {
+                let mut runtime = gsm_sniffer_runtime.take();
+
+                if let Some(active_runtime) = runtime.as_mut() {
+                    match active_runtime.sniffer.set_promiscuous_mode(false) {
                         Ok(()) => info!("Disabled Promiscuous mode"),
                         Err(e) => error!("Failed to disable promiscuous mode: {:?}", e),
                     }
@@ -211,13 +232,9 @@ pub async fn gsm_wifi_manager_task(
 
                 Timer::after(GSM_PROMISCUOUS_DISABLE_SETTLE_DELAY).await;
 
-                let active_sniffer = sniffer.take();
-                let mut active_controller = controller.take();
-                let active_radio = radio.take();
-
-                if let Some(controller_ref) = active_controller.as_mut() {
+                if let Some(active_runtime) = runtime.as_mut() {
                     info!("GSM radio control: fully deinitializing Wi-Fi for GSM upload");
-                    if let Err(e) = controller_ref.stop_async().await {
+                    if let Err(e) = active_runtime.controller.stop_async().await {
                         info!(
                             "GSM radio control: stop_async before deinit returned: {:?}",
                             e
@@ -225,10 +242,7 @@ pub async fn gsm_wifi_manager_task(
                     }
                 }
 
-                drop(active_sniffer);
-                drop(active_controller);
-                drop(active_radio);
-
+                drop(runtime);
                 Timer::after(GSM_WIFI_STOP_SETTLE_DELAY).await;
 
                 orchestrator_event_publisher
@@ -247,14 +261,7 @@ pub async fn gsm_wifi_manager_task(
 }
 
 #[cfg(feature = "uplink-gsm")]
-async fn create_gsm_sniffer_runtime() -> Result<
-    (
-        OwnedRadioController,
-        WifiController<'static>,
-        Sniffer<'static>,
-    ),
-    WifiError,
-> {
+async fn create_gsm_sniffer_runtime() -> Result<GsmSnifferRuntime, WifiError> {
     let radio = esp_radio::init()
         .map_err(|_| WifiError::InternalError(esp_radio::wifi::InternalWifiError::State))?;
     let (radio, radio_ref) = OwnedRadioController::new(radio);
@@ -277,7 +284,11 @@ async fn create_gsm_sniffer_runtime() -> Result<
     }
     Timer::after(GSM_WIFI_START_SETTLE_DELAY).await;
 
-    Ok((radio, controller, interfaces.sniffer))
+    Ok(GsmSnifferRuntime::new(
+        controller,
+        interfaces.sniffer,
+        radio,
+    ))
 }
 
 #[cfg(feature = "uplink-gsm")]
