@@ -182,6 +182,54 @@ pub async fn gsm_wifi_manager_task(
                     }
                 };
 
+                match active_runtime.controller.is_started() {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Err(e) = active_runtime
+                            .controller
+                            .set_config(&gsm_sniffer_mode_config())
+                        {
+                            error!(
+                                "GSM radio control: failed to configure Wi-Fi for sniffing: {:?}",
+                                e
+                            );
+                            orchestrator_event_publisher
+                                .publish(SystemEvents::Sniffer {
+                                    id,
+                                    event: SnifferEvents::SniffingError,
+                                })
+                                .await;
+                            continue;
+                        }
+
+                        if let Err(e) = active_runtime.controller.start_async().await {
+                            error!(
+                                "GSM radio control: failed to start Wi-Fi for sniffing: {:?}",
+                                e
+                            );
+                            orchestrator_event_publisher
+                                .publish(SystemEvents::Sniffer {
+                                    id,
+                                    event: SnifferEvents::SniffingError,
+                                })
+                                .await;
+                            continue;
+                        }
+
+                        Timer::after(GSM_WIFI_START_SETTLE_DELAY).await;
+                    }
+                    Err(e) => {
+                        error!("GSM radio control: is_started failed: {:?}", e);
+                        orchestrator_event_publisher
+                            .publish(SystemEvents::Sniffer {
+                                id,
+                                event: SnifferEvents::SniffingError,
+                            })
+                            .await;
+                        continue;
+                    }
+                }
+
                 match active_runtime.sniffer.set_promiscuous_mode(true) {
                     Ok(()) => {
                         info!("Enabled Promiscuous Mode");
