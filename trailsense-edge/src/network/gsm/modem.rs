@@ -4,7 +4,10 @@ use atat::{
     asynch::{AtatClient, Client},
     digest::ParseError,
 };
-use core::fmt::Write;
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use embassy_executor::Spawner;
 use esp_hal::{Async, uart::Uart, uart::UartRx};
 use log::{error, info};
@@ -30,9 +33,15 @@ const CONNECT_RETRY_DELAY: u64 = 2;
 const HTTP_POST_ATTEMPTS: usize = 1;
 const HTTP_ACTION_TIMEOUT_SECS: u64 = 15;
 const HTTP_DATA_INPUT_TIMEOUT_MS: u32 = 5_000;
+static MODEM_IN_USE: AtomicBool = AtomicBool::new(false);
 
 impl GsmModem {
     pub fn new(uart: Uart<'static, Async>, spawner: Spawner) -> Result<Self, GsmError> {
+        if MODEM_IN_USE.swap(true, Ordering::AcqRel) {
+            error!("GSM modem already initialized (singleton)");
+            return Err(GsmError::GsmInitError);
+        }
+
         let (reader, writer) = uart.split();
 
         static RES_SLOT: ResponseSlot<BUF_SIZE> = ResponseSlot::new();
@@ -44,6 +53,7 @@ impl GsmModem {
             Ok(u) => u,
             Err(e) => {
                 error!("GSM Init Error:{e:?}");
+                MODEM_IN_USE.swap(false, Ordering::AcqRel);
                 return Err(GsmError::GsmInitError);
             }
         };
@@ -64,6 +74,7 @@ impl GsmModem {
         );
         if let Err(e) = spawner.spawn(ingress_task(ingress, reader)) {
             error!("GSM Init Error:{e}");
+            MODEM_IN_USE.swap(false, Ordering::AcqRel);
             return Err(GsmError::GsmInitError);
         }
         Ok(GsmModem {
@@ -150,13 +161,13 @@ impl GsmModem {
 
         Err(GsmError::IpTimeout)
     }
-    pub async fn post_json(&mut self, payload: &str) -> Result<(), GsmError> {
+    pub async fn post_json(&mut self, payload: &str, url: &str) -> Result<(), GsmError> {
         let mut last_err: Option<GsmError> = None;
 
         for attempt in 1..=HTTP_POST_ATTEMPTS {
             info!("GSM HTTP session start attempt={}", attempt);
 
-            match self.run_http_post_session(payload).await {
+            match self.run_http_post_session(payload, url).await {
                 Ok(()) => {
                     info!("GSM HTTP upload completed");
                     return Ok(());
@@ -227,7 +238,7 @@ impl GsmModem {
 }
 
 impl GsmModem {
-    async fn run_http_post_session(&mut self, payload: &str) -> Result<(), GsmError> {
+    async fn run_http_post_session(&mut self, payload: &str, url: &str) -> Result<(), GsmError> {
         info!("GSM HTTP step: HTTPTERM");
         let _ = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
 
@@ -256,12 +267,10 @@ impl GsmModem {
             "AT+HTTPPARA=\"SSLCFG\",0",
         )
         .await?;
-        run_http_step(
-            &mut self.client,
-            "HTTPPARA URL",
-            "AT+HTTPPARA=\"URL\",\"https://api.trailsense.daugt.com/ingest\"",
-        )
-        .await?;
+        let mut url_cmd = heapless::String::<192>::new();
+        write!(&mut url_cmd, "AT+HTTPPARA=\"URL\",\"{}\"", url)
+            .map_err(|_| GsmError::CommandBuildFailed)?;
+        run_http_step(&mut self.client, "HTTPPARA URL", url_cmd.as_str()).await?;
         run_http_step(
             &mut self.client,
             "HTTPPARA CONTENT",

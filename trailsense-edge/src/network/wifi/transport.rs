@@ -18,21 +18,12 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender
 use crate::{
     network::{
         TransportControl, UplinkTransport,
+        config::{DEVICE_ID, ingest_url},
         types::{ConnectionOutcome, ControlOutcome, PackageDto, SendDataOutcome},
     },
     orchestration::types::CorrelationId,
     packages::package_store::PackageEntity,
     wifi::{WifiCtx, tasks::WifiControlCmd, wait_for_connection},
-};
-
-const BASE_URL: &str = match option_env!("TRAILSENSE_API_URL") {
-    Some(v) => v,
-    None => "https://api.trailsense.daugt.com",
-};
-
-const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
-    Some(v) => v,
-    None => "71ec4873-944e-49c1-b7c4-4b856797715f",
 };
 
 const REQUEST_BUILD_ATTEMPTS: u8 = 3;
@@ -154,13 +145,14 @@ impl UplinkTransport for WifiTransport {
 
         let mut rx_buffer = [0; 4096]; // TODO: Refactor to reuse static TLS RX/TX buffers instead of allocating new ones per call, to reduce memory usage on constrained devices.
         let mut tx_buffer = [0; 4096];
-        let mut url = heapless::String::<128>::new();
-        use core::fmt::Write;
-        if let Err(e) = write!(&mut url, "{}/ingest", BASE_URL) {
-            error!("Failed to generate URL: {}", e);
-            self.consecutive_dns_failures = 0;
-            return SendDataOutcome::FatalFailure;
-        }
+        let url = match ingest_url() {
+            Ok(u) => u,
+            Err(e) => {
+                error!("Failed to generate URL: {}", e);
+                self.consecutive_dns_failures = 0;
+                return SendDataOutcome::FatalFailure;
+            }
+        };
 
         let dns = DnsSocket::new(self.stack);
         let tcp_state = TcpClientState::<1, 4096, 4096>::new();

@@ -7,6 +7,7 @@ use serde_json::to_string;
 
 use crate::network::{
     TransportControl, UplinkTransport,
+    config::{DEVICE_ID, ingest_url},
     gsm::{
         commands::{GsmError, GsmErrorKind},
         modem::GsmModem,
@@ -37,11 +38,6 @@ impl GsmTransport {
 
 impl UplinkTransport for GsmTransport {
     async fn send_data(&mut self, packages: Vec<PackageEntity>) -> SendDataOutcome {
-        const DEVICE_ID: &str = match option_env!("TRAILSENSE_EDGE_ID") {
-            Some(v) => v,
-            None => "71ec4873-944e-49c1-b7c4-4b856797715f",
-        };
-
         if !self.auto_connect_enabled {
             return SendDataOutcome::BackoffRequired;
         }
@@ -51,6 +47,14 @@ impl UplinkTransport for GsmTransport {
             .map(|p| PackageDto::new(p.age_in_seconds, p.count, DEVICE_ID))
             .collect();
 
+        let url = match ingest_url() {
+            Ok(u) => u,
+            Err(e) => {
+                error!("Failed to generate URL: {}", e);
+                return SendDataOutcome::FatalFailure;
+            }
+        };
+
         let body = match to_string(&payload) {
             Ok(v) => v,
             Err(e) => {
@@ -59,7 +63,7 @@ impl UplinkTransport for GsmTransport {
             }
         };
 
-        match self.modem.post_json(body.as_str()).await {
+        match self.modem.post_json(body.as_str(), url.as_str()).await {
             Ok(()) => SendDataOutcome::Success,
             Err(e) => {
                 error!("GSM post_json failed: {:?}", e);
