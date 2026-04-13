@@ -183,6 +183,10 @@ impl UplinkTransport for WifiTransport {
                 return SendDataOutcome::FatalFailure;
             }
         };
+        match core::str::from_utf8(&body) {
+            Ok(json) => info!("WiFi upload payload: {}", json),
+            Err(_) => info!("WiFi upload payload is non-UTF8 (len={} bytes)", body.len()),
+        }
 
         let request_builder = 'request: loop {
             for attempt in 0..REQUEST_BUILD_ATTEMPTS {

@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use esp_hal::{Async, uart::Uart};
-use log::error;
+use log::{error, info};
 use serde_json::to_string;
 
 use crate::network::{
@@ -62,6 +62,7 @@ impl UplinkTransport for GsmTransport {
                 return SendDataOutcome::FatalFailure;
             }
         };
+        info!("GSM upload payload: {}", body);
 
         match self.modem.post_json(body.as_str(), url.as_str()).await {
             Ok(()) => SendDataOutcome::Success,
