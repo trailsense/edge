@@ -1,9 +1,5 @@
 extern crate alloc;
 
-#[cfg(feature = "uplink-gsm")]
-use alloc::boxed::Box;
-#[cfg(feature = "uplink-gsm")]
-use core::ptr::NonNull;
 use embassy_sync::channel::Receiver;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, pubsub::Publisher};
 
@@ -28,48 +24,24 @@ const GSM_WIFI_STOP_SETTLE_DELAY: Duration = Duration::from_secs(5);
 const GSM_WIFI_START_SETTLE_DELAY: Duration = Duration::from_secs(2);
 #[cfg(feature = "uplink-gsm")]
 const GSM_SNIFFER_SSID: &str = "trailsense-sniffer";
-#[cfg(feature = "uplink-gsm")]
-struct OwnedRadioController {
-    ptr: NonNull<Controller<'static>>,
-}
 
 #[cfg(feature = "uplink-gsm")]
-impl OwnedRadioController {
-    fn new(controller: Controller<'static>) -> (Self, &'static mut Controller<'static>) {
-        let radio_ref: &'static mut Controller<'static> = Box::leak(Box::new(controller));
-        let ptr = NonNull::from(&mut *radio_ref);
-        (Self { ptr }, radio_ref)
-    }
-}
+static GSM_RADIO_CELL: static_cell::StaticCell<Controller<'static>> =
+    static_cell::StaticCell::new();
 
 #[cfg(feature = "uplink-gsm")]
 struct GsmSnifferRuntime {
     controller: WifiController<'static>,
     sniffer: Sniffer<'static>,
-    _radio_owner: OwnedRadioController,
 }
 
 #[cfg(feature = "uplink-gsm")]
 impl GsmSnifferRuntime {
-    fn new(
-        controller: WifiController<'static>,
-        sniffer: Sniffer<'static>,
-        radio_owner: OwnedRadioController,
-    ) -> Self {
+    fn new(controller: WifiController<'static>, sniffer: Sniffer<'static>) -> Self {
         GsmSnifferRuntime {
             controller,
             sniffer,
-            _radio_owner: radio_owner,
         }
-    }
-}
-
-#[cfg(feature = "uplink-gsm")]
-impl Drop for OwnedRadioController {
-    fn drop(&mut self) {
-        // SAFETY: `ptr` comes from `Box::leak` in `OwnedRadioController::new`
-        // and this owner guarantees the allocation is reclaimed exactly once.
-        unsafe { drop(Box::from_raw(self.ptr.as_ptr())) };
     }
 }
 
@@ -276,7 +248,12 @@ pub async fn gsm_wifi_manager_task(
 async fn create_gsm_sniffer_runtime(wifi: WIFI<'static>) -> Result<GsmSnifferRuntime, WifiError> {
     let radio = esp_radio::init()
         .map_err(|_| WifiError::InternalError(esp_radio::wifi::InternalWifiError::State))?;
-    let (radio, radio_ref) = OwnedRadioController::new(radio);
+
+    let radio_ref = GSM_RADIO_CELL
+        .try_init(radio)
+        .ok_or(WifiError::InternalError(
+            esp_radio::wifi::InternalWifiError::State,
+        ))?;
     let (mut controller, interfaces) =
         match esp_radio::wifi::new(radio_ref, wifi, Default::default()) {
             Ok(v) => v,
@@ -292,11 +269,7 @@ async fn create_gsm_sniffer_runtime(wifi: WIFI<'static>) -> Result<GsmSnifferRun
     }
     Timer::after(GSM_WIFI_START_SETTLE_DELAY).await;
 
-    Ok(GsmSnifferRuntime::new(
-        controller,
-        interfaces.sniffer,
-        radio,
-    ))
+    Ok(GsmSnifferRuntime::new(controller, interfaces.sniffer))
 }
 
 #[cfg(feature = "uplink-gsm")]
