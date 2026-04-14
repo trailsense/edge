@@ -40,7 +40,8 @@ pub fn push(count: u32) -> bool {
 
         // Evict oldest buffered package to keep a bounded queue.
         // TODO: think about better solution, chunking, deleting values in between? Drop a few 0 count values?
-        // Thought appeared on 20.02.2026 --> If is 0, do delete it, only if enough other values are around it maybe?ß
+        // Thought appeared on 20.02.2026 --> If is 0, do delete it, only if enough other values are around it maybe?
+        // Thought appeared on 14.04.2026 --> If too many packages (maybe when needing to save locally or something like that) -> Merge two packages from 5 minutes intervals into one of 10 mins. Basically if i have 4 packages i can half them by just making them contain data for 10 minute intervals.
         if packages.is_full() {
             packages.remove(0);
         }

@@ -9,19 +9,25 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use embassy_executor::Spawner;
-use esp_hal::{Async, uart::Uart, uart::UartRx};
+use esp_hal::{
+    Async,
+    uart::{Uart, UartRx},
+};
 use log::{error, info};
 use static_cell::StaticCell;
 
 use crate::network::gsm::{
     commands::{GetIpAddr, GsmError, GsmErrorKind, HttpUrcParser, NetOpen, Urc},
-    helpers::{send_raw_cmd, send_raw_payload, send_raw_read_cmd},
+    helpers::{
+        DEFAULT_RAW_CMD_TIMEOUT_MS, send_raw_cmd, send_raw_payload, send_raw_read_cmd,
+    },
 };
 
 pub struct GsmModem {
     client: Client<'static, esp_hal::uart::UartTx<'static, esp_hal::Async>, BUF_SIZE>,
     urc_sub: UrcSubscription<'static, Urc, URC_CAPACITY, URC_SUBSCRIBERS>,
     network_open_confirmed: bool,
+    modem_ready: bool,
 }
 pub const BUF_SIZE: usize = 1024;
 const URC_CAPACITY: usize = 1;
@@ -29,10 +35,15 @@ const URC_SUBSCRIBERS: usize = 1;
 const MAX_IP_RETRIES: usize = 5;
 const IP_RETRY_DELAY: u64 = 1;
 const MAX_CONNECT_RETRIES: usize = 3;
+const MAX_MODEM_READY_RETRIES: usize = 3;
 const CONNECT_RETRY_DELAY: u64 = 2;
 const HTTP_POST_ATTEMPTS: usize = 1;
 const HTTP_ACTION_TIMEOUT_SECS: u64 = 15;
 const HTTP_DATA_INPUT_TIMEOUT_MS: u32 = 5_000;
+const MODEM_INIT_ATTEMPT_DELAY_SECS: u64 = 2;
+const READY_AT_TIMEOUT_MS: u32 = 1_000;
+const READY_READ_TIMEOUT_MS: u32 = 3_000;
+
 static MODEM_IN_USE: AtomicBool = AtomicBool::new(false);
 
 impl GsmModem {
@@ -81,6 +92,7 @@ impl GsmModem {
             client,
             urc_sub,
             network_open_confirmed: false,
+            modem_ready: false,
         })
     }
     pub async fn open_network(&mut self) -> Result<(), GsmError> {
@@ -114,6 +126,11 @@ impl GsmModem {
         Err(GsmError::IpTimeout)
     }
     pub async fn ensure_connected(&mut self) -> Result<(), GsmError> {
+        if !self.modem_ready {
+            self.ensure_modem_ready().await?;
+            self.modem_ready = true;
+        }
+
         let mut last_err: Option<GsmError> = None;
 
         for _attempt in 0..MAX_CONNECT_RETRIES {
@@ -146,6 +163,7 @@ impl GsmModem {
                 }
                 Err(e) => {
                     if e.kind() == GsmErrorKind::Hard {
+                        self.modem_ready = false;
                         last_err = Some(e);
                         break;
                     }
@@ -161,6 +179,80 @@ impl GsmModem {
 
         Err(GsmError::IpTimeout)
     }
+    async fn ensure_modem_ready(&mut self) -> Result<(), GsmError> {
+        for _attempt in 0..MAX_MODEM_READY_RETRIES {
+            if let Err(e) =
+                send_raw_cmd::<BUF_SIZE, READY_AT_TIMEOUT_MS>(&mut self.client, "AT").await
+            {
+                info!("GSM: AT probe failed: {:?}", e);
+                embassy_time::Timer::after_secs(MODEM_INIT_ATTEMPT_DELAY_SECS).await;
+                continue;
+            }
+
+            match self
+                .expect_read_contains::<READY_READ_TIMEOUT_MS>("AT+CPIN?", &["READY"])
+                .await
+            {
+                Ok(_) => {
+                    info!("GSM: AT+CPIN is ready");
+                }
+                Err(_) => {
+                    embassy_time::Timer::after_secs(MODEM_INIT_ATTEMPT_DELAY_SECS).await;
+                    continue;
+                }
+            }
+
+            match self
+                .expect_read_contains::<READY_READ_TIMEOUT_MS>("AT+CEREG?", &[",1", ",5"])
+                .await
+            {
+                Ok(_) => {
+                    info!("GSM: AT+CEREG is ready");
+                }
+                Err(_) => {
+                    embassy_time::Timer::after_secs(MODEM_INIT_ATTEMPT_DELAY_SECS).await;
+                    continue;
+                }
+            }
+
+            match self
+                .expect_read_contains::<READY_READ_TIMEOUT_MS>("AT+CGATT?", &[": 1"])
+                .await
+            {
+                Ok(_) => {
+                    info!("GSM: AT+CGATT is ready");
+                    return Ok(());
+                }
+                Err(_) => {
+                    embassy_time::Timer::after_secs(MODEM_INIT_ATTEMPT_DELAY_SECS).await;
+                    continue;
+                }
+            }
+        }
+        self.modem_ready = false;
+        return Err(GsmError::NotReady);
+    }
+
+    async fn expect_read_contains<const TIMEOUT_MS: u32>(
+        &mut self,
+        cmd: &str,
+        expected_response: &[&str],
+    ) -> Result<(), GsmError> {
+        let resp = send_raw_read_cmd::<BUF_SIZE, TIMEOUT_MS>(&mut self.client, cmd).await?;
+
+        for response in expected_response.into_iter() {
+            if resp.as_str().contains(response) {
+                return Ok(());
+            }
+        }
+        error!(
+            "SIM not ready, command: {} response: {}",
+            cmd,
+            resp.as_str()
+        );
+        Err(GsmError::NotReady)
+    }
+
     pub async fn post_json(&mut self, payload: &str, url: &str) -> Result<(), GsmError> {
         let mut last_err: Option<GsmError> = None;
 
@@ -193,12 +285,16 @@ impl GsmModem {
         const DISCONNECT_IP_CHECK_RETRIES: usize = 3;
         const DISCONNECT_IP_CHECK_DELAY: u64 = 1;
 
-        let http_term_res = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
+        let http_term_res =
+            send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(&mut self.client, "AT+HTTPTERM")
+                .await;
         if let Err(e) = &http_term_res {
             info!("GSM HTTPTERM returned: {:?}", e);
         }
 
-        let net_close_res = send_raw_cmd(&mut self.client, "AT+NETCLOSE").await;
+        let net_close_res =
+            send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(&mut self.client, "AT+NETCLOSE")
+                .await;
         if let Err(e) = &net_close_res {
             error!("GSM NETCLOSE failed: {:?}", e);
         } else {
@@ -240,7 +336,9 @@ impl GsmModem {
 impl GsmModem {
     async fn run_http_post_session(&mut self, payload: &str, url: &str) -> Result<(), GsmError> {
         info!("GSM HTTP step: HTTPTERM");
-        let _ = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
+        let _ =
+            send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(&mut self.client, "AT+HTTPTERM")
+                .await;
 
         run_http_step(&mut self.client, "HTTPINIT", "AT+HTTPINIT").await?;
         run_http_step(
@@ -333,10 +431,18 @@ impl GsmModem {
         }
 
         info!("GSM HTTP step: HTTPREAD");
-        if let Ok(body) = send_raw_read_cmd(&mut self.client, "AT+HTTPREAD=0,512").await {
+        if let Ok(body) =
+            send_raw_read_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
+                &mut self.client,
+                "AT+HTTPREAD=0,512",
+            )
+            .await
+        {
             info!("HTTPREAD body: {}", body);
         }
-        let _ = send_raw_cmd(&mut self.client, "AT+HTTPTERM").await;
+        let _ =
+            send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(&mut self.client, "AT+HTTPTERM")
+                .await;
         Ok(())
     }
 }
@@ -347,7 +453,7 @@ async fn run_http_step(
     cmd: &str,
 ) -> Result<(), GsmError> {
     info!("GSM HTTP step: {}", label);
-    if let Err(e) = send_raw_cmd(client, cmd).await {
+    if let Err(e) = send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(client, cmd).await {
         error!("GSM HTTP step failed: {}: {:?}", label, e);
         return Err(e);
     }
@@ -358,13 +464,15 @@ async fn log_http_action_timeout_diagnostics(
     client: &mut Client<'_, esp_hal::uart::UartTx<'_, esp_hal::Async>, BUF_SIZE>,
 ) {
     info!("GSM HTTP timeout diagnostics: HTTPREAD");
-    match send_raw_read_cmd(client, "AT+HTTPREAD=0,512").await {
+    match send_raw_read_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(client, "AT+HTTPREAD=0,512")
+        .await
+    {
         Ok(body) => info!("GSM HTTP timeout diagnostics HTTPREAD body: {}", body),
         Err(e) => info!("GSM HTTP timeout diagnostics HTTPREAD failed: {:?}", e),
     }
 
     info!("GSM HTTP timeout diagnostics: HTTPTERM");
-    match send_raw_cmd(client, "AT+HTTPTERM").await {
+    match send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(client, "AT+HTTPTERM").await {
         Ok(()) => info!("GSM HTTP timeout diagnostics HTTPTERM ok"),
         Err(e) => info!("GSM HTTP timeout diagnostics HTTPTERM failed: {:?}", e),
     }

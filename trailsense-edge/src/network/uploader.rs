@@ -32,22 +32,28 @@ pub async fn uploader_task(
         3,
     >,
 ) {
-    #[cfg(feature = "uplink-gsm")]
-    const SEND_TIMEOUT: Duration = Duration::from_secs(90);
     #[cfg(not(feature = "uplink-gsm"))]
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
-    const RETRY_DELAY: Duration = Duration::from_millis(500);
-    // TODO(recovery): track consecutive GSM failures and trigger modem reset/rebootstrap after N failures instead of immediate terminal behavior (hardware reset).
-    #[cfg(feature = "uplink-gsm")]
-    const SEND_ATTEMPTS: u8 = 1;
     #[cfg(not(feature = "uplink-gsm"))]
     const SEND_ATTEMPTS: u8 = 5;
-    #[cfg(feature = "uplink-gsm")]
-    const GSM_RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
+    // TODO(recovery): track consecutive GSM failures and trigger modem reset/rebootstrap after N failures instead of immediate terminal behavior (hardware reset).
+    #[cfg(feature = "uplink-gsm")]
+    const SEND_TIMEOUT: Duration = Duration::from_secs(45);
+    #[cfg(feature = "uplink-gsm")]
+    const SEND_ATTEMPTS: u8 = 2;
+    #[cfg(feature = "uplink-gsm")]
+    const GSM_RECOVERY_DELAY: Duration = Duration::from_secs(5);
+    #[cfg(feature = "uplink-gsm")]
+    const GSM_MAX_ERRORS: u8 = 5;
+    #[cfg(feature = "uplink-gsm")]
+    let mut consecutive_gsm_failures: u8 = 0;
+
+    const RETRY_DELAY: Duration = Duration::from_millis(500);
     loop {
         let command = network_command_receiver.receive().await;
         let outcome;
+
         match command {
             SystemCmd::SetTransportEnabled { id, enabled } => {
                 if enabled {
@@ -139,7 +145,9 @@ pub async fn uploader_task(
                             info!("UPL: id={} backoff required; recovery pending", id.0);
                             break;
                         }
-                        Err(_) => error!("Package sending timed out"),
+                        Err(_) => {
+                            error!("Package sending timed out");
+                        }
                     }
 
                     if attempt + 1 < SEND_ATTEMPTS {
@@ -147,14 +155,25 @@ pub async fn uploader_task(
                     }
                 }
 
+                #[cfg(feature = "uplink-gsm")]
+                {
+                    if ok {
+                        consecutive_gsm_failures = 0;
+                    } else {
+                        consecutive_gsm_failures = consecutive_gsm_failures.saturating_add(1);
+
+                        if consecutive_gsm_failures >= GSM_MAX_ERRORS {
+                            error!("UPL: reached GSM failure threshold; trigger recovery");
+                            // TODO: trigger recovery/reset event
+                        }
+
+                        Timer::after(GSM_RECOVERY_DELAY).await;
+                    }
+                }
+
                 let event = if ok {
                     UploadEvents::UploadSuccessful
                 } else {
-                    #[cfg(feature = "uplink-gsm")]
-                    {
-                        // Avoid immediately hammering modem HTTP state after failure.
-                        Timer::after(GSM_RECOVERY_DELAY).await;
-                    }
                     UploadEvents::UploadError
                 };
 

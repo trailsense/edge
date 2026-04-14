@@ -16,11 +16,11 @@ const PERIOD: Duration = Duration::from_secs(20); // Change for testing reasons.
 const NETWORK_LIMIT: u8 = 5;
 const MAX_LOCAL_SAVES: u8 = 10;
 const MAX_SAVE_FAILURES: u8 = 5;
-const GENERAL_TIMEOUT: Duration = Duration::from_secs(8);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const STOP_SNIFF_TIMEOUT: Duration = Duration::from_secs(8);
-// Must exceed uploader SEND_TIMEOUT (GSM is 90s) to avoid overlapping retries.
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+// Keep orchestration waits above GSM worst-case paths (connect/readiness ~= <90s, upload window ~= <100s with current retries).
+const GENERAL_TIMEOUT: Duration = Duration::from_secs(15);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
+const STOP_SNIFF_TIMEOUT: Duration = Duration::from_secs(10);
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(130);
 
 enum WaitResult<T> {
     Matched(T),
@@ -393,7 +393,6 @@ pub async fn orchestrate_node(
             }
             SystemState::Sleep => {
                 // TODO: Implement real deep sleep. For now just take a X min break.
-
                 // Reset network error count, so that after sleep it can retry connecting.
                 network_error_count = 0;
                 Timer::after(PERIOD).await;
