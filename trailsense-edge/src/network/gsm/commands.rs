@@ -169,6 +169,7 @@ impl Parser for HttpUrcParser {
 pub enum GsmError {
     Atat(AtatError),
     IpTimeout,
+    NotReady,
     BufferTooSmall { needed: usize, available: usize },
     CommandBuildFailed,
     HttpActionTimeout,
@@ -186,6 +187,7 @@ impl GsmError {
     pub fn kind(&self) -> GsmErrorKind {
         match self {
             GsmError::IpTimeout => GsmErrorKind::Transient,
+            GsmError::NotReady => GsmErrorKind::Transient,
             GsmError::BufferTooSmall { .. } => GsmErrorKind::Hard,
             GsmError::CommandBuildFailed => GsmErrorKind::Hard,
             GsmError::HttpActionTimeout => GsmErrorKind::Transient,

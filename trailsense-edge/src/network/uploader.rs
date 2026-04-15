@@ -7,9 +7,11 @@ use crate::{
     },
     orchestration::types::{DataEvents, SystemCmd, SystemEvents, TransportEvents, UploadEvents},
 };
+
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
 };
+
 use embassy_time::{Duration, Timer, WithTimeout};
 use log::{error, info};
 
@@ -32,22 +34,21 @@ pub async fn uploader_task(
         3,
     >,
 ) {
-    #[cfg(feature = "uplink-gsm")]
-    const SEND_TIMEOUT: Duration = Duration::from_secs(90);
     #[cfg(not(feature = "uplink-gsm"))]
     const SEND_TIMEOUT: Duration = Duration::from_secs(30);
-    const RETRY_DELAY: Duration = Duration::from_millis(500);
-    // TODO(recovery): track consecutive GSM failures and trigger modem reset/rebootstrap after N failures instead of immediate terminal behavior (hardware reset).
-    #[cfg(feature = "uplink-gsm")]
-    const SEND_ATTEMPTS: u8 = 1;
     #[cfg(not(feature = "uplink-gsm"))]
     const SEND_ATTEMPTS: u8 = 5;
-    #[cfg(feature = "uplink-gsm")]
-    const GSM_RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
+    #[cfg(feature = "uplink-gsm")]
+    const SEND_TIMEOUT: Duration = Duration::from_secs(45);
+    #[cfg(feature = "uplink-gsm")]
+    const SEND_ATTEMPTS: u8 = 2;
+
+    const RETRY_DELAY: Duration = Duration::from_millis(500);
     loop {
         let command = network_command_receiver.receive().await;
         let outcome;
+
         match command {
             SystemCmd::SetTransportEnabled { id, enabled } => {
                 if enabled {
@@ -139,7 +140,9 @@ pub async fn uploader_task(
                             info!("UPL: id={} backoff required; recovery pending", id.0);
                             break;
                         }
-                        Err(_) => error!("Package sending timed out"),
+                        Err(_) => {
+                            error!("Package sending timed out");
+                        }
                     }
 
                     if attempt + 1 < SEND_ATTEMPTS {
@@ -150,11 +153,6 @@ pub async fn uploader_task(
                 let event = if ok {
                     UploadEvents::UploadSuccessful
                 } else {
-                    #[cfg(feature = "uplink-gsm")]
-                    {
-                        // Avoid immediately hammering modem HTTP state after failure.
-                        Timer::after(GSM_RECOVERY_DELAY).await;
-                    }
                     UploadEvents::UploadError
                 };
 
