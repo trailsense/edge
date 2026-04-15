@@ -7,9 +7,11 @@ use crate::{
     },
     orchestration::types::{DataEvents, SystemCmd, SystemEvents, TransportEvents, UploadEvents},
 };
+
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver, pubsub::Publisher,
 };
+
 use embassy_time::{Duration, Timer, WithTimeout};
 use log::{error, info};
 
@@ -37,17 +39,10 @@ pub async fn uploader_task(
     #[cfg(not(feature = "uplink-gsm"))]
     const SEND_ATTEMPTS: u8 = 5;
 
-    // TODO(recovery): track consecutive GSM failures and trigger modem reset/rebootstrap after N failures instead of immediate terminal behavior (hardware reset).
     #[cfg(feature = "uplink-gsm")]
     const SEND_TIMEOUT: Duration = Duration::from_secs(45);
     #[cfg(feature = "uplink-gsm")]
     const SEND_ATTEMPTS: u8 = 2;
-    #[cfg(feature = "uplink-gsm")]
-    const GSM_RECOVERY_DELAY: Duration = Duration::from_secs(5);
-    #[cfg(feature = "uplink-gsm")]
-    const GSM_MAX_ERRORS: u8 = 5;
-    #[cfg(feature = "uplink-gsm")]
-    let mut consecutive_gsm_failures: u8 = 0;
 
     const RETRY_DELAY: Duration = Duration::from_millis(500);
     loop {
@@ -152,22 +147,6 @@ pub async fn uploader_task(
 
                     if attempt + 1 < SEND_ATTEMPTS {
                         Timer::after(RETRY_DELAY).await;
-                    }
-                }
-
-                #[cfg(feature = "uplink-gsm")]
-                {
-                    if ok {
-                        consecutive_gsm_failures = 0;
-                    } else {
-                        consecutive_gsm_failures = consecutive_gsm_failures.saturating_add(1);
-
-                        if consecutive_gsm_failures >= GSM_MAX_ERRORS {
-                            error!("UPL: reached GSM failure threshold; trigger recovery");
-                            // TODO: trigger recovery/reset event
-                        }
-
-                        Timer::after(GSM_RECOVERY_DELAY).await;
                     }
                 }
 

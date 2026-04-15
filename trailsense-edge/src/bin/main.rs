@@ -105,9 +105,8 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "uplink-gsm")]
     let transport = match build_active_transport_gsm(uart, spawner) {
         Ok(t) => t,
-        // TODO: (hw-reset): wire ESP32 GPIO to modem RESET/PWRKEY and attempt hardware reset + reinit before fatal_idle().
         Err(e) => {
-            error!("Issue initializing GSM module (fatal): {:?}", e);
+            error!("Issue initializing GSM module: {:?}", e);
             fatal_idle().await;
         }
     };

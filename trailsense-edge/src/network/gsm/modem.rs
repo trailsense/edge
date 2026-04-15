@@ -18,9 +18,7 @@ use static_cell::StaticCell;
 
 use crate::network::gsm::{
     commands::{GetIpAddr, GsmError, GsmErrorKind, HttpUrcParser, NetOpen, Urc},
-    helpers::{
-        DEFAULT_RAW_CMD_TIMEOUT_MS, send_raw_cmd, send_raw_payload, send_raw_read_cmd,
-    },
+    helpers::{DEFAULT_RAW_CMD_TIMEOUT_MS, send_raw_cmd, send_raw_payload, send_raw_read_cmd},
 };
 
 pub struct GsmModem {
@@ -28,6 +26,8 @@ pub struct GsmModem {
     urc_sub: UrcSubscription<'static, Urc, URC_CAPACITY, URC_SUBSCRIBERS>,
     network_open_confirmed: bool,
     modem_ready: bool,
+    connect_failure_streak: u8,
+    upload_failure_streak: u8,
 }
 pub const BUF_SIZE: usize = 1024;
 const URC_CAPACITY: usize = 1;
@@ -43,6 +43,9 @@ const HTTP_DATA_INPUT_TIMEOUT_MS: u32 = 5_000;
 const MODEM_INIT_ATTEMPT_DELAY_SECS: u64 = 2;
 const READY_AT_TIMEOUT_MS: u32 = 1_000;
 const READY_READ_TIMEOUT_MS: u32 = 3_000;
+const RECOVERY_INTER_STEP_DELAY_SECS: u64 = 2;
+const CPOWD_BOOT_SETTLE_SECS: u64 = 8;
+const UPLOAD_RECOVERY_THRESHOLD: u8 = 3;
 
 static MODEM_IN_USE: AtomicBool = AtomicBool::new(false);
 
@@ -93,6 +96,8 @@ impl GsmModem {
             urc_sub,
             network_open_confirmed: false,
             modem_ready: false,
+            connect_failure_streak: 0,
+            upload_failure_streak: 0,
         })
     }
     pub async fn open_network(&mut self) -> Result<(), GsmError> {
@@ -127,7 +132,10 @@ impl GsmModem {
     }
     pub async fn ensure_connected(&mut self) -> Result<(), GsmError> {
         if !self.modem_ready {
-            self.ensure_modem_ready().await?;
+            if let Err(e) = self.ensure_modem_ready().await {
+                self.handle_connect_failure_recovery().await;
+                return Err(e);
+            }
             self.modem_ready = true;
         }
 
@@ -138,6 +146,7 @@ impl GsmModem {
                 match self.client.send(&GetIpAddr).await {
                     Ok(resp) if !resp.ip.is_empty() && resp.ip != "0.0.0.0" => {
                         info!("Already connected; IP address: '{}'", resp.ip);
+                        self.connect_failure_streak = 0;
                         return Ok(());
                     }
                     Ok(resp) => {
@@ -158,6 +167,7 @@ impl GsmModem {
             match self.wait_for_ip().await {
                 Ok(()) => {
                     self.network_open_confirmed = true;
+                    self.connect_failure_streak = 0;
                     info!("Connected after NETOPEN + IP wait");
                     return Ok(());
                 }
@@ -173,11 +183,9 @@ impl GsmModem {
             }
         }
 
-        if let Some(e) = last_err {
-            return Err(e);
-        }
-
-        Err(GsmError::IpTimeout)
+        let err = last_err.unwrap_or(GsmError::IpTimeout);
+        self.handle_connect_failure_recovery().await;
+        Err(err)
     }
     async fn ensure_modem_ready(&mut self) -> Result<(), GsmError> {
         for _attempt in 0..MAX_MODEM_READY_RETRIES {
@@ -253,6 +261,70 @@ impl GsmModem {
         Err(GsmError::NotReady)
     }
 
+    async fn handle_connect_failure_recovery(&mut self) {
+        self.connect_failure_streak = self.connect_failure_streak.saturating_add(1);
+        let stage = (self.connect_failure_streak - 1) % 3;
+        info!(
+            "GSM recovery: streak={} -> stage={}",
+            self.connect_failure_streak,
+            stage + 1
+        );
+        self.run_recovery_stage(stage).await;
+
+        self.network_open_confirmed = false;
+        self.modem_ready = false;
+    }
+
+    async fn run_recovery_stage(&mut self, stage: u8) {
+        match stage {
+            0 => {
+                info!("GSM recovery L1: restarting radio stack with CFUN cycle");
+                if let Err(e) = send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
+                    &mut self.client,
+                    "AT+CFUN=0",
+                )
+                .await
+                {
+                    info!("GSM recovery L1 CFUN=0 returned: {:?}", e);
+                }
+                embassy_time::Timer::after_secs(RECOVERY_INTER_STEP_DELAY_SECS).await;
+                if let Err(e) = send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
+                    &mut self.client,
+                    "AT+CFUN=1",
+                )
+                .await
+                {
+                    info!("GSM recovery L1 CFUN=1 returned: {:?}", e);
+                }
+            }
+            1 => {
+                info!("GSM recovery L2: soft reboot with AT+CRESET");
+                if let Err(e) = send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
+                    &mut self.client,
+                    "AT+CRESET",
+                )
+                .await
+                {
+                    info!("GSM recovery L2 CRESET returned: {:?}", e);
+                }
+                embassy_time::Timer::after_secs(RECOVERY_INTER_STEP_DELAY_SECS).await;
+            }
+            _ => {
+                info!("GSM recovery L3: power cycle with AT+CPOWD=1");
+                if let Err(e) = send_raw_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
+                    &mut self.client,
+                    "AT+CPOWD=1",
+                )
+                .await
+                {
+                    // CPOWD may terminate UART path mid-command; treat failure here as expected.
+                    info!("GSM recovery L3 CPOWD returned: {:?}", e);
+                }
+                embassy_time::Timer::after_secs(CPOWD_BOOT_SETTLE_SECS).await;
+            }
+        }
+    }
+
     pub async fn post_json(&mut self, payload: &str, url: &str) -> Result<(), GsmError> {
         let mut last_err: Option<GsmError> = None;
 
@@ -261,6 +333,7 @@ impl GsmModem {
 
             match self.run_http_post_session(payload, url).await {
                 Ok(()) => {
+                    self.upload_failure_streak = 0;
                     info!("GSM HTTP upload completed");
                     return Ok(());
                 }
@@ -273,12 +346,36 @@ impl GsmModem {
                         );
                     }
                     error!("GSM HTTP session attempt={} failed: {:?}", attempt, e);
+                    self.handle_upload_failure_recovery(e.kind()).await;
                     last_err = Some(e);
                 }
             }
         }
 
         Err(last_err.unwrap_or(GsmError::HttpActionTimeout))
+    }
+
+    async fn handle_upload_failure_recovery(&mut self, kind: GsmErrorKind) {
+        if kind == GsmErrorKind::Hard {
+            self.upload_failure_streak = 0;
+            return;
+        }
+
+        self.upload_failure_streak = self.upload_failure_streak.saturating_add(1);
+        if self.upload_failure_streak < UPLOAD_RECOVERY_THRESHOLD {
+            return;
+        }
+
+        let stage = (self.upload_failure_streak - UPLOAD_RECOVERY_THRESHOLD) % 3;
+        info!(
+            "GSM upload recovery: streak={} -> stage={}",
+            self.upload_failure_streak,
+            stage + 1
+        );
+        self.run_recovery_stage(stage).await;
+
+        self.network_open_confirmed = false;
+        self.modem_ready = false;
     }
 
     pub async fn disconnect(&mut self) -> Result<(), GsmError> {
@@ -431,12 +528,11 @@ impl GsmModem {
         }
 
         info!("GSM HTTP step: HTTPREAD");
-        if let Ok(body) =
-            send_raw_read_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
-                &mut self.client,
-                "AT+HTTPREAD=0,512",
-            )
-            .await
+        if let Ok(body) = send_raw_read_cmd::<BUF_SIZE, DEFAULT_RAW_CMD_TIMEOUT_MS>(
+            &mut self.client,
+            "AT+HTTPREAD=0,512",
+        )
+        .await
         {
             info!("HTTPREAD body: {}", body);
         }
