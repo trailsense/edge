@@ -13,7 +13,7 @@ use esp_hal::{
     Async,
     uart::{Uart, UartRx},
 };
-use log::{error, info};
+use log::{debug, error, info};
 use static_cell::StaticCell;
 
 use crate::network::gsm::{
@@ -238,6 +238,10 @@ impl GsmModem {
             }
         }
         self.modem_ready = false;
+        error!(
+            "GSM readiness checks failed after {} attempts",
+            MAX_MODEM_READY_RETRIES
+        );
         return Err(GsmError::NotReady);
     }
 
@@ -253,8 +257,8 @@ impl GsmModem {
                 return Ok(());
             }
         }
-        error!(
-            "SIM not ready, command: {} response: {}",
+        debug!(
+            "GSM readiness probe not ready yet, command: {} response: {}",
             cmd,
             resp.as_str()
         );

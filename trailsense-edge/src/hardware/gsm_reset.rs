@@ -5,16 +5,11 @@ use log::info;
 
 use crate::hardware::types::HardwareCmd;
 
-#[cfg(feature = "uplink-gsm")]
 const FORCE_POWER_DOWN_ASSERT_SECS: u64 = 16;
-#[cfg(feature = "uplink-gsm")]
 const POWER_DOWN_SETTLE_SECS: u64 = 2;
-#[cfg(feature = "uplink-gsm")]
 const POWER_ON_TAP_SECS: u64 = 2;
-#[cfg(feature = "uplink-gsm")]
 const POWER_ON_SETTLE_SECS: u64 = 5;
 
-#[cfg(feature = "uplink-gsm")]
 fn drive_pwrkey_low(pin: &mut Flex<'_>) {
     pin.apply_output_config(&OutputConfig::default());
     pin.set_input_enable(false);
@@ -22,15 +17,15 @@ fn drive_pwrkey_low(pin: &mut Flex<'_>) {
     pin.set_output_enable(true);
 }
 
-#[cfg(feature = "uplink-gsm")]
 fn release_pwrkey_high_z(pin: &mut Flex<'_>) {
     pin.set_output_enable(false);
     pin.apply_input_config(&InputConfig::default());
     pin.set_input_enable(true);
 }
 
-// This is test code for power reset. Does not work for our breakout model. But it could work if we build our custom pcb. It is not included in build
-#[cfg(feature = "uplink-gsm")]
+// Test code for GSM power reset. It does not work with our current breakout model,
+// but it may be useful for a custom PCB. This code is currently unwired in
+// the build.
 pub async fn pulse_gsm_reset_pin(gsm_reset_pin: &mut Flex<'_>) {
     // A7670E force reboot via PWRKEY:
     // 1) Hold LOW long enough to force power down
@@ -63,7 +58,6 @@ pub async fn pulse_gsm_reset_pin(gsm_reset_pin: &mut Flex<'_>) {
     Timer::after(Duration::from_secs(POWER_ON_SETTLE_SECS)).await;
 }
 
-#[cfg(feature = "uplink-gsm")]
 #[embassy_executor::task]
 pub async fn trigger_gsm_reset(
     mut gsm_reset_pin: Flex<'static>,
