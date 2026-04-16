@@ -22,7 +22,7 @@ cargo test --manifest-path tests/host/Cargo.toml --features property-tests
 
 CI:
 
-- host tests run in GitHub Actions on pull requests and on `main` pushes.
+- host tests run in GitHub Actions on pull requests.
 - property tests are mandatory in CI.
 
 ## Device tests (local only)
