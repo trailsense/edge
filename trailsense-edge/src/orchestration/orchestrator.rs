@@ -7,15 +7,13 @@ use embassy_sync::{
 use embassy_time::{Duration, Instant, Timer};
 use log::{debug, error, info};
 
+use crate::orchestration::policy::{bump_counter, should_enter_sleep, should_fallback_to_saving};
 use crate::orchestration::types::{
     CorrelationId, DataEvents, SnifferEvents, SystemCmd, SystemEvents, SystemState,
     TransportEvents, UploadEvents,
 };
 
 const PERIOD: Duration = Duration::from_secs(20); // Change for testing reasons.
-const NETWORK_LIMIT: u8 = 5;
-const MAX_LOCAL_SAVES: u8 = 10;
-const MAX_SAVE_FAILURES: u8 = 5;
 // Keep orchestration waits above GSM worst-case paths (connect/readiness ~= <90s, upload window ~= <100s with current retries).
 const GENERAL_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -26,8 +24,6 @@ enum WaitResult<T> {
     Matched(T),
     Timeout,
 }
-
-// Waits until a matching event arrives; ignores unrelated events.
 
 /// # Wait For SystemEvent
 /// This function helps to add a timeout when sending a system command and waiting for an event as a response
@@ -264,8 +260,8 @@ pub async fn orchestrate_node(
                 {
                     WaitResult::Matched(true) => current_state = SystemState::Uploading,
                     WaitResult::Matched(false) | WaitResult::Timeout => {
-                        network_error_count = network_error_count.saturating_add(1);
-                        current_state = if network_error_count >= NETWORK_LIMIT {
+                        network_error_count = bump_counter(network_error_count);
+                        current_state = if should_fallback_to_saving(network_error_count) {
                             SystemState::SavingData
                         } else {
                             Timer::after(Duration::from_secs(2)).await;
@@ -305,8 +301,8 @@ pub async fn orchestrate_node(
                         current_state = SystemState::Idle;
                     }
                     WaitResult::Matched(Err(())) | WaitResult::Timeout => {
-                        network_error_count = network_error_count.saturating_add(1);
-                        current_state = if network_error_count >= NETWORK_LIMIT {
+                        network_error_count = bump_counter(network_error_count);
+                        current_state = if should_fallback_to_saving(network_error_count) {
                             SystemState::SavingData
                         } else {
                             SystemState::Connecting
@@ -373,19 +369,17 @@ pub async fn orchestrate_node(
                 {
                     WaitResult::Matched(true) => {
                         current_state = SystemState::Idle;
-                        network_fallback_count = network_fallback_count.saturating_add(1);
+                        network_fallback_count = bump_counter(network_fallback_count);
                         save_failure_count = 0;
                     }
                     WaitResult::Matched(false) | WaitResult::Timeout => {
                         error!("Issue saving data locally");
-                        save_failure_count = save_failure_count.saturating_add(1);
+                        save_failure_count = bump_counter(save_failure_count);
                         current_state = SystemState::SavingData;
                     }
                 }
 
-                if network_fallback_count >= MAX_LOCAL_SAVES
-                    || save_failure_count >= MAX_SAVE_FAILURES
-                {
+                if should_enter_sleep(network_fallback_count, save_failure_count) {
                     network_fallback_count = 0;
                     save_failure_count = 0;
                     current_state = SystemState::Sleep;
