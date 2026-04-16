@@ -11,3 +11,8 @@ Enter a concise description of the changes made in this pull request.
 
 ### XYZ Function (Optional):
 - Explain any specific functions or modules that were added or modified.
+
+## Validation
+- [ ] Host tests ran (`cargo test --manifest-path tests/host/Cargo.toml --features property-tests`)
+- [ ] Device tests ran locally on a connected ESP32 (`cd tests/device && ./run-modem-lifecycle.sh`)
+- [ ] Device test result/output summary is included in this PR

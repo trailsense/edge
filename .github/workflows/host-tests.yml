@@ -1,0 +1,25 @@
+name: host-tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+
+    env:
+      TRAILSENSE_API_URL: "https://ci.invalid"
+      TRAILSENSE_EDGE_ID: "ci-test-node"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run host logic tests
+        run: cargo test --manifest-path tests/host/Cargo.toml --all-targets --features property-tests

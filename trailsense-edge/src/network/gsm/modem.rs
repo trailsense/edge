@@ -19,6 +19,7 @@ use static_cell::StaticCell;
 use crate::network::gsm::{
     commands::{GetIpAddr, GsmError, GsmErrorKind, HttpUrcParser, NetOpen, Urc},
     helpers::{DEFAULT_RAW_CMD_TIMEOUT_MS, send_raw_cmd, send_raw_payload, send_raw_read_cmd},
+    recovery::{connect_recovery_stage_index, upload_recovery_stage_index},
 };
 
 pub struct GsmModem {
@@ -267,7 +268,7 @@ impl GsmModem {
 
     async fn handle_connect_failure_recovery(&mut self) {
         self.connect_failure_streak = self.connect_failure_streak.saturating_add(1);
-        let stage = (self.connect_failure_streak - 1) % 3;
+        let stage = connect_recovery_stage_index(self.connect_failure_streak);
         info!(
             "GSM recovery: streak={} -> stage={}",
             self.connect_failure_streak,
@@ -370,7 +371,9 @@ impl GsmModem {
             return;
         }
 
-        let stage = (self.upload_failure_streak - UPLOAD_RECOVERY_THRESHOLD) % 3;
+        let stage =
+            upload_recovery_stage_index(self.upload_failure_streak, UPLOAD_RECOVERY_THRESHOLD)
+                .expect("upload stage exists after threshold check");
         info!(
             "GSM upload recovery: streak={} -> stage={}",
             self.upload_failure_streak,

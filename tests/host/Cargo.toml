@@ -1,0 +1,15 @@
+[package]
+name = "trailsense-host-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+property-tests = ["dep:quickcheck"]
+
+[dependencies]
+atat = { version = "0.24.1", default-features = false, features = ["derive"] }
+heapless = "0.9.2"
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0.149", default-features = false, features = ["alloc"] }
+quickcheck = { version = "1.0.3", optional = true }
