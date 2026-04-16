@@ -7,7 +7,7 @@ This folder contains host tests and local ESP32 device tests.
 Run:
 
 ```bash
-TRAILSENSE_API_URL=https://ci.invalid \
+TRAILSENSE_API_URL=https://api.trailsense.daugt.com \
 TRAILSENSE_EDGE_ID=ci-test-node \
 cargo test --manifest-path tests/host/Cargo.toml --features property-tests
 ```
@@ -15,7 +15,7 @@ cargo test --manifest-path tests/host/Cargo.toml --features property-tests
 Or export once in your shell session:
 
 ```bash
-export TRAILSENSE_API_URL=https://ci.invalid
+export TRAILSENSE_API_URL=https://api.trailsense.daugt.com
 export TRAILSENSE_EDGE_ID=ci-test-node
 cargo test --manifest-path tests/host/Cargo.toml --features property-tests
 ```

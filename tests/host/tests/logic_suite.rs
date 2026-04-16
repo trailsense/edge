@@ -47,7 +47,7 @@ mod property_tests {
 #[test]
 fn ingest_url_builds_expected_suffix() {
     let url = config::ingest_url().expect("ingest URL should be buildable");
-    assert!(url.as_str().ends_with("/ingest"));
+    assert_eq!(url.as_str(), "https://api.trailsense.daugt.com/ingest");
 }
 
 #[test]

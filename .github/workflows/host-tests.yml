@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TRAILSENSE_API_URL: "https://ci.invalid"
+      TRAILSENSE_API_URL: "https://api.trailsense.daugt.com"
       TRAILSENSE_EDGE_ID: "ci-test-node"
 
     steps:
