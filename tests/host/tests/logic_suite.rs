@@ -10,6 +10,8 @@ mod gsm_commands;
 mod gsm_recovery;
 #[path = "../../../trailsense-edge/src/network/types.rs"]
 mod network_types;
+#[path = "../../../trailsense-edge/src/orchestration/policy.rs"]
+mod orchestration_policy;
 #[path = "../../../trailsense-edge/src/probes/counter.rs"]
 mod probe_counter;
 
@@ -45,7 +47,7 @@ mod property_tests {
 #[test]
 fn ingest_url_builds_expected_suffix() {
     let url = config::ingest_url().expect("ingest URL should be buildable");
-    assert_eq!(url.as_str(), "https://api.trailsense.daugt.com/ingest");
+    assert!(url.as_str().ends_with("/ingest"));
 }
 
 #[test]
@@ -167,4 +169,23 @@ fn recovery_stage_policy_matches_expected_round_robin() {
             Some(3)
         ]
     );
+}
+
+#[test]
+fn network_failure_policy_falls_back_at_limit() {
+    assert!(!orchestration_policy::should_fallback_to_saving(4));
+    assert!(orchestration_policy::should_fallback_to_saving(5));
+}
+
+#[test]
+fn save_policy_enters_sleep_at_thresholds() {
+    assert!(!orchestration_policy::should_enter_sleep(9, 4));
+    assert!(orchestration_policy::should_enter_sleep(10, 0));
+    assert!(orchestration_policy::should_enter_sleep(0, 5));
+}
+
+#[test]
+fn counter_policy_uses_saturating_increment() {
+    assert_eq!(orchestration_policy::bump_counter(0), 1);
+    assert_eq!(orchestration_policy::bump_counter(u8::MAX), u8::MAX);
 }

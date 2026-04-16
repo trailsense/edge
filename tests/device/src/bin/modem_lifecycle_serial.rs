@@ -8,11 +8,11 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
+    Async,
     clock::CpuClock,
     peripherals::Peripherals,
     timer::timg::TimerGroup,
     uart::{Config, Uart},
-    Async,
 };
 use log::{error, info};
 use trailsense_edge::{
@@ -104,7 +104,10 @@ async fn run_modem_lifecycle(
         return Err("transport_disable_failed");
     }
 
-    if !matches!(transport.ensure_connected().await, ConnectionOutcome::Disconnected) {
+    if !matches!(
+        transport.ensure_connected().await,
+        ConnectionOutcome::Disconnected
+    ) {
         return Err("transport_disable_not_effective");
     }
 
@@ -130,7 +133,10 @@ async fn wait_until_connected(transport: &mut GsmTransport, max_attempts: u8) ->
     while attempts < max_attempts {
         attempts = attempts.saturating_add(1);
 
-        if matches!(transport.ensure_connected().await, ConnectionOutcome::Connected) {
+        if matches!(
+            transport.ensure_connected().await,
+            ConnectionOutcome::Connected
+        ) {
             return true;
         }
 
