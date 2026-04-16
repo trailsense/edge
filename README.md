@@ -12,4 +12,4 @@ This builds, flashes, and opens the serial monitor for the connected ESP32.
 
 ## Tests
 
-See [tests/README.md](/Users/francesco/Documents/FH Salzburg/MMT/MSc/MP 1/TrailSense/Code/edge/tests/README.md).
+See [tests/README.md](tests/README.md).
