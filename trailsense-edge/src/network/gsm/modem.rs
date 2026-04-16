@@ -371,9 +371,15 @@ impl GsmModem {
             return;
         }
 
-        let stage =
+        let Some(stage) =
             upload_recovery_stage_index(self.upload_failure_streak, UPLOAD_RECOVERY_THRESHOLD)
-                .expect("upload stage exists after threshold check");
+        else {
+            error!(
+                "GSM upload recovery stage unavailable; streak={} threshold={}",
+                self.upload_failure_streak, UPLOAD_RECOVERY_THRESHOLD
+            );
+            return;
+        };
         info!(
             "GSM upload recovery: streak={} -> stage={}",
             self.upload_failure_streak,
