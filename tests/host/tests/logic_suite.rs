@@ -3,16 +3,22 @@
 use atat::{AtatCmd, Parser};
 
 #[path = "../../../trailsense-edge/src/network/config.rs"]
+#[allow(dead_code)]
 mod config;
 #[path = "../../../trailsense-edge/src/network/gsm/commands.rs"]
+#[allow(dead_code)]
 mod gsm_commands;
 #[path = "../../../trailsense-edge/src/network/gsm/recovery.rs"]
+#[allow(dead_code)]
 mod gsm_recovery;
 #[path = "../../../trailsense-edge/src/network/types.rs"]
+#[allow(dead_code)]
 mod network_types;
 #[path = "../../../trailsense-edge/src/orchestration/policy.rs"]
+#[allow(dead_code)]
 mod orchestration_policy;
 #[path = "../../../trailsense-edge/src/probes/counter.rs"]
+#[allow(dead_code)]
 mod probe_counter;
 
 #[test]
