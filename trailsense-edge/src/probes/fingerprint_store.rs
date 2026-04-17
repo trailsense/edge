@@ -4,7 +4,7 @@ use core::cell::RefCell;
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 use heapless::Vec as HeaplessVec;
 
-const MAX_FINGERPRINTS: usize = 2048; // TODO: This might be needed to change to 512 probably (test max size etc).
+const MAX_FINGERPRINTS: usize = 512; // TODO: Calculate how much we can actually fit
 
 static FINGERPRINTS: Mutex<CriticalSectionRawMutex, RefCell<HeaplessVec<u64, MAX_FINGERPRINTS>>> =
     Mutex::new(RefCell::new(HeaplessVec::new()));

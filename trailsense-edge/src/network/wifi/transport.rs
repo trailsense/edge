@@ -184,7 +184,11 @@ impl UplinkTransport for WifiTransport {
             }
         };
         match core::str::from_utf8(&body) {
-            Ok(json) => info!("WiFi upload payload: {}", json),
+            Ok(_) => info!(
+                "WiFi upload payload prepared: packages={}, len={} bytes",
+                payload.len(),
+                body.len()
+            ),
             Err(_) => info!("WiFi upload payload is non-UTF8 (len={} bytes)", body.len()),
         }
 

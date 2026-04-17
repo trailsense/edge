@@ -62,7 +62,11 @@ impl UplinkTransport for GsmTransport {
                 return SendDataOutcome::FatalFailure;
             }
         };
-        info!("GSM upload payload: {}", body);
+        info!(
+            "GSM upload prepared: packages={}, body_len={}",
+            payload.len(),
+            body.len()
+        );
 
         match self.modem.post_json(body.as_str(), url.as_str()).await {
             Ok(()) => SendDataOutcome::Success,
