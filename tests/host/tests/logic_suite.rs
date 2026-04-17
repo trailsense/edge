@@ -20,6 +20,13 @@ mod orchestration_policy;
 #[path = "../../../trailsense-edge/src/probes/counter.rs"]
 #[allow(dead_code)]
 mod probe_counter;
+#[path = "../../../trailsense-edge/src/probes/models.rs"]
+#[allow(dead_code)]
+pub(crate) mod probe_models;
+
+mod probes {
+    pub(crate) use super::probe_models as models;
+}
 
 #[test]
 fn deduplicate_empty_returns_zero() {
@@ -28,14 +35,84 @@ fn deduplicate_empty_returns_zero() {
 
 #[test]
 fn deduplicate_counts_unique_fingerprints() {
-    let input = [0x0001, 0x0002, 0x0003, 0x0004];
+    let input = separated_fingerprints(4);
     assert_eq!(probe_counter::deduplicate_probes(&input), 4);
 }
 
 #[test]
 fn deduplicate_filters_exact_duplicates() {
-    let input = [0x00AA, 0x00AA, 0x00AA, 0x00AB, 0x00AB, 0x00AC];
+    let unique = separated_fingerprints(3);
+    let input = [
+        unique[0],
+        unique[0],
+        unique[0],
+        unique[1],
+        unique[1],
+        unique[2],
+    ];
     assert_eq!(probe_counter::deduplicate_probes(&input), 3);
+}
+
+fn separated_fingerprints(n: usize) -> Vec<u64> {
+    let tau = probe_models::TAU;
+    let alpha_sum: f32 = probe_models::MODEL.iter().map(|m| m.alpha).sum();
+    let min_diff = ((alpha_sum - tau) / 2.0) + 0.25;
+
+    let mut by_alpha = probe_models::MODEL
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (i, m.alpha))
+        .collect::<Vec<_>>();
+    by_alpha.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+
+    let mut idx = 0usize;
+    let mut out = Vec::new();
+    while out.len() < n {
+        let mut fp = 0u64;
+        let mut group_alpha = 0.0f32;
+        while idx < by_alpha.len() && group_alpha <= min_diff {
+            let model_idx = by_alpha[idx].0;
+            let bit_pos = probe_models::MODEL_SIZE - 1 - model_idx;
+            fp |= 1u64 << bit_pos;
+            group_alpha += by_alpha[idx].1;
+            idx += 1;
+        }
+        if group_alpha <= min_diff {
+            break;
+        }
+        out.push(fp);
+    }
+
+    assert!(
+        out.len() >= n,
+        "could not construct enough separated fingerprints for current model"
+    );
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let score = weighted_score_for_test(out[i], out[j]);
+            assert!(
+                score < tau,
+                "generated fingerprints not separated enough (score={score}, tau={tau})"
+            );
+        }
+    }
+
+    out
+}
+
+fn weighted_score_for_test(a: u64, b: u64) -> f32 {
+    let mut score = 0.0f32;
+    for i in 0..probe_models::MODEL_SIZE {
+        let bit_pos = probe_models::MODEL_SIZE - 1 - i;
+        let mask = 1u64 << bit_pos;
+        if (a & mask) == (b & mask) {
+            score += probe_models::MODEL[i].alpha;
+        } else {
+            score -= probe_models::MODEL[i].alpha;
+        }
+    }
+    score
 }
 
 #[cfg(feature = "property-tests")]
@@ -44,7 +121,7 @@ mod property_tests {
     use quickcheck::quickcheck;
 
     quickcheck! {
-        fn deduplicate_output_is_bounded(values: Vec<u16>) -> bool {
+        fn deduplicate_output_is_bounded(values: Vec<u64>) -> bool {
             probe_counter::deduplicate_probes(&values) as usize <= values.len()
         }
     }
