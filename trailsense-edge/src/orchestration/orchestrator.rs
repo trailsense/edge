@@ -13,7 +13,7 @@ use crate::orchestration::types::{
     TransportEvents, UploadEvents,
 };
 
-const PERIOD: Duration = Duration::from_secs(20); // Change for testing reasons.
+const PERIOD: Duration = Duration::from_secs(60); // Change for testing reasons.
 // Keep orchestration waits above GSM worst-case paths (connect/readiness ~= <90s, upload window ~= <100s with current retries).
 const GENERAL_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);

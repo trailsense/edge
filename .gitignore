@@ -1,2 +1,4 @@
 # Build artifacts for isolated test crates
 tests/*/target/
+tests/training_data
+tests/host/parity_fixture.json
