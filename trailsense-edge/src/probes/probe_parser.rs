@@ -55,7 +55,7 @@ fn fingerprint_probe(data: &[u8]) -> u64 {
             score -= negative_bits.count_ones() as i32;
         }
 
-        let bit = if score >= model.threshold as i32 {
+        let bit = if score > model.threshold as i32 {
             1
         } else {
             0
