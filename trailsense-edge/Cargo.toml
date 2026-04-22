@@ -60,6 +60,7 @@ ieee80211 = "0.5.9"
 embassy-time = "0.5.0"
 embassy-executor = "0.9.1"
 static_cell = "2.1.1"
+embassy-embedded-hal = "0.5.0"
 embassy-net =  { version = "0.8.0", features = [
   "dhcpv4",
   "medium-ethernet",
@@ -77,6 +78,7 @@ serde = { version = "1.0.228", default-features = false, features = ["derive", "
 der = { version = "0.8.0", features = ["heapless"] }
 embassy-futures = "0.1.2"
 atat = { version = "0.24.1", features = ["derive"],  optional = true }
+lora-phy = "3.0.1"
 
 [profile.dev]
 # Rust debug is too slow.
@@ -93,6 +95,7 @@ opt-level        = 's'
 overflow-checks  = false
 
 [features]
-default = ["uplink-gsm"]
+default = ["lora-gateway", "uplink-wifi"]
 uplink-wifi = []
+lora-gateway = []
 uplink-gsm = ["dep:atat"]

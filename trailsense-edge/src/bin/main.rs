@@ -7,17 +7,28 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
+use embassy_sync::mutex::Mutex;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, pubsub::PubSubChannel,
 };
+use embassy_time::Delay;
 use esp_backtrace as _;
+use esp_hal::Async;
 use esp_hal::clock::CpuClock;
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig};
 use esp_hal::peripherals::Peripherals;
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
+use lora_phy::LoRa;
+use lora_phy::iv::GenericSx126xInterfaceVariant;
+use lora_phy::sx126x::{Config as Sx126xConfig, Sx126x, Sx1262};
 
 #[cfg(feature = "uplink-wifi")]
 use esp_hal::rng::Rng;
 
+use static_cell::StaticCell;
+use trailsense_edge::lora;
 use trailsense_edge::probes::models::{DEDUP_MODEL_VERSION, MODEL_SIZE, TAU};
 
 use embassy_time::{Duration, Timer};
@@ -27,7 +38,6 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config, Uart};
 use log::{error, info};
 #[cfg(feature = "uplink-wifi")]
-use static_cell::StaticCell;
 use trailsense_edge::{
     network::{self},
     orchestration::{
@@ -62,6 +72,10 @@ static SNIFFING_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> 
 static NETWORK_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, SystemCmd, 4> = Channel::new();
 static ORCHESTRATOR_EVENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, SystemEvents, 4, 1, 3> =
     PubSubChannel::new();
+
+static SPI_BUS: StaticCell<
+    Mutex<CriticalSectionRawMutex, esp_hal::spi::master::Spi<'static, Async>>,
+> = StaticCell::new();
 
 #[cfg(feature = "uplink-wifi")]
 const INIT_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -255,6 +269,47 @@ async fn main(spawner: Spawner) -> ! {
             error! {"DEDUP config is not correct."}
         }
     }
+
+    let spi = Spi::new(peripherals.SPI3, SpiConfig::default())
+        .expect("failed to create SPI")
+        .with_sck(peripherals.GPIO18)
+        .with_mosi(peripherals.GPIO23)
+        .with_miso(peripherals.GPIO19)
+        .into_async();
+
+    // LoRa control pins.
+    let nss = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default());
+    let reset = Output::new(peripherals.GPIO14, Level::High, OutputConfig::default());
+    let dio1 = Input::new(peripherals.GPIO33, InputConfig::default());
+    let busy = Input::new(peripherals.GPIO32, InputConfig::default());
+    let rx_en = Output::new(peripherals.GPIO25, Level::Low, OutputConfig::default());
+    let tx_en = Output::new(peripherals.GPIO26, Level::Low, OutputConfig::default());
+
+    let iv = GenericSx126xInterfaceVariant::new(reset, dio1, busy, Some(rx_en), Some(tx_en))
+        .expect("failed to create SX126x interface variant");
+
+    let spi_bus = SPI_BUS.init(Mutex::new(spi));
+    let spi_device = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(spi_bus, nss);
+
+    let radio = Sx126x::new(
+        spi_device,
+        iv,
+        Sx126xConfig {
+            chip: Sx1262,
+            tcxo_ctrl: None,
+            use_dcdc: false,
+            rx_boost: false,
+        },
+    );
+
+    #[cfg(feature = "lora-gateway")]
+    let lora: LoRa<_, _> = LoRa::new(radio, false, Delay)
+        .await
+        .expect("failed to init LoRa");
+
+    if let Err(e) = spawner.spawn(lora::tasks::recieve_lora_packets(lora)) {
+        error!("Failed to spawn lora receive task: {}", e);
+    };
 
     loop {
         Timer::after(Duration::from_secs(60)).await;

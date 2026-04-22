@@ -9,6 +9,7 @@ compile_error!("No uplink transport selected. Enable `uplink-gsm` (default) or `
 // TODO: This has been deactivated/unwired since not needed for now. Could be needed for sleep etc.
 // #[cfg(feature = "uplink-gsm")]
 // pub mod hardware;
+pub mod lora;
 pub mod network;
 pub mod orchestration;
 pub mod packages;
